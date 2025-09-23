@@ -1,0 +1,12 @@
+# Arquivos sensíveis
+credenciais.json
+mapping.json
+*.ico
+
+# Build / distribuição
+dist/
+build/
+data/
+__pycache__/
+*.exe
+*.spec
