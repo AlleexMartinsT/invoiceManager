@@ -1,130 +1,123 @@
 # utils_estoque.py
 import os
-import json
+import sys
+import requests
 from datetime import datetime
+from supabase import create_client
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+# ---------------- Configuração do Supabase ----------------
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://jouphkenfywomlryztle.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpvdXBoa2VuZnl3b21scnl6dGxlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg2NDc1MzcsImV4cCI6MjA3NDIyMzUzN30.tRs9ycQPxAbxwXOQWaObM2gSFiBOnDA_nkJtJv85kzk")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-SUPPLIERS_FILE = os.path.join(DATA_DIR, "suppliers.json")
-CONFERENTES_FILE = os.path.join(DATA_DIR, "conferentes.json")
-NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
-SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
-
-# Defaults
-_DEFAULT_SUPPLIERS = [
-    {"id": 1, "name": "Fornecedor A"},
-    {"id": 2, "name": "Fornecedor B"},
-]
-_DEFAULT_CONFERENTES = [
-    {"id": 1, "name": "Cristiane Vieira"},
-    {"id": 2, "name": "João Silva"},
-]
-_DEFAULT_SETTINGS = {"ask_on_close": True}
-
-def _load_json(path, default):
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(default, f, indent=2, ensure_ascii=False)
-        return default.copy()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # recreate
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(default, f, indent=2, ensure_ascii=False)
-        return default.copy()
-
-def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-# suppliers
+# ---------------- Fornecedores ----------------
 def load_suppliers():
-    return _load_json(SUPPLIERS_FILE, _DEFAULT_SUPPLIERS)
-
-def save_suppliers(suppliers):
-    _save_json(SUPPLIERS_FILE, suppliers)
+    resp = supabase.table("suppliers").select("*").order("name").execute() # Ordenando por nome
+    return resp.data or []
 
 def add_supplier(name):
-    suppliers = load_suppliers()
-    # não permitir nomes repetidos
-    if any(s["name"].lower() == name.lower() for s in suppliers):
-        return suppliers
-    next_id = max((s.get("id", 0) for s in suppliers), default=0) + 1
-    suppliers.append({"id": next_id, "name": name})
-    save_suppliers(suppliers)
-    return suppliers
+    existing = supabase.table("suppliers").select("*").eq("name", name).execute()
+    if existing.data:
+        return load_suppliers()
+    supabase.table("suppliers").insert({"name": name}).execute()
+    return load_suppliers()
 
 def remove_supplier(supplier_id):
-    suppliers = load_suppliers()
-    suppliers = [s for s in suppliers if s.get("id") != supplier_id]
-    save_suppliers(suppliers)
-    return suppliers
+    supabase.table("suppliers").delete().eq("id", supplier_id).execute()
+    return load_suppliers()
 
-# conferentes
+# ---------------- Conferentes ----------------
 def load_conferentes():
-    return _load_json(CONFERENTES_FILE, _DEFAULT_CONFERENTES)
-
-def save_conferentes(conferentes):
-    _save_json(CONFERENTES_FILE, conferentes)
+    resp = supabase.table("conferentes").select("*").order("name").execute() # Ordenando por nome
+    return resp.data or []
 
 def add_conferente(name):
-    conferentes = load_conferentes()
-    if any(c["name"].lower() == name.lower() for c in conferentes):
-        return conferentes
-    next_id = max((c.get("id", 0) for c in conferentes), default=0) + 1
-    conferentes.append({"id": next_id, "name": name})
-    save_conferentes(conferentes)
-    return conferentes
+    existing = supabase.table("conferentes").select("*").eq("name", name).execute()
+    if existing.data:
+        return load_conferentes()
+    supabase.table("conferentes").insert({"name": name}).execute()
+    return load_conferentes()
+
 def remove_conferente(conferente_id):
-    conferentes = load_conferentes()
-    conferentes = [c for c in conferentes if c.get("id") != conferente_id]
-    save_conferentes(conferentes)
-    return conferentes
+    supabase.table("conferentes").delete().eq("id", conferente_id).execute()
+    return load_conferentes()
 
-# notes
+# ---------------- Notas ----------------
 def load_notes():
-    return _load_json(NOTES_FILE, [])
+    resp = supabase.table("notes").select("*").order("id").execute()
+    return resp.data or []
 
-def save_note(note):
-    """
-    note: dict with keys:
-      - nf_number (str)
-      - fornecedor_id (int)
-      - fornecedor_name (str)
-      - data_chegada (ISO date str)
-      - cnpj (EH or MVA)
-      - conferente_id
-      - conferente_name
-      - created_at (ISO)
-    """
-    notes = load_notes()
-    notes.append(note)
-    _save_json(NOTES_FILE, notes)
-    return notes
+def save_note(note: dict):
+    supabase.table("notes").insert(note).execute()
+    return load_notes()
 
-def overwrite_notes(notes):
-    _save_json(NOTES_FILE, notes)
+def update_note(note_id, fields: dict):
+    supabase.table("notes").update(fields).eq("id", note_id).execute()
+    return load_notes()
 
-# settings
-def load_settings():
-    return _load_json(SETTINGS_FILE, _DEFAULT_SETTINGS)
+def remove_note(note_id):
+    supabase.table("notes").delete().eq("id", note_id).execute()
+    return load_notes()
 
-def save_settings(settings):
-    _save_json(SETTINGS_FILE, settings)
+def save_all_notes(notes: list[dict]):
+    supabase.table("notes").delete().neq("id", 0).execute()
+    if notes:
+        supabase.table("notes").insert(notes).execute()
+    return load_notes()
 
-# helper
+# ---------------- Helpers ----------------
 def today_br():
     return datetime.now().strftime("%d-%m-%Y")
 
-def save_all_notes(notes):
-    """Sobrescreve todas as notas no arquivo."""
-    overwrite_notes(notes)
+def resource_path(relative_path: str):
+    """Garante que os assets funcionem no PyInstaller"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
-def notes_path():
-    """Retorna o caminho do arquivo notes.json."""
-    return NOTES_FILE
+# ---------------- Update Checker ----------------
+    
+def check_for_updates(root):
+    import requests
+    from tkinter import messagebox
+    import threading
+    from versionfile_generator import APP_VERSION
+    
+    GITHUB_REPO = "AlleexMartinsT/invoiceManager"
+    
+    def worker():
+        try:
+            # Checa versão
+            response = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest", timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            latest_version = data["tag_name"].lstrip("v")
 
+            if latest_version > APP_VERSION:
+                # Mostra diálogo na thread principal usando after()
+                def ask_user():
+                    if messagebox.askyesno("Atualização Disponível",
+                        f"Uma nova versão ({latest_version}) está disponível! Deseja baixar agora?"):
+                        asset_url = data["assets"][0]["browser_download_url"]
+                        new_file = f"Relatório de Clientes {latest_version}.exe"
+                        try:
+                            download = requests.get(asset_url, stream=True, timeout=30)
+                            with open(new_file, "wb") as f:
+                                for chunk in download.iter_content(8192):
+                                    f.write(chunk)
+                            messagebox.showinfo("Atualizado",
+                                f"Nova versão baixada como '{new_file}'. "
+                                "Feche o app, substitua o arquivo atual por esse novo e reinicie.")
+                        except Exception as e:
+                            messagebox.showerror("Erro no Download", f"Ocorreu um erro: {e}")
+                root.after(0, ask_user)  # root é sua janela Tk principal
+            else:
+                print("App atualizado.")
+
+        except Exception as e:
+            root.after(0, lambda: messagebox.showerror("Erro na Atualização",
+                                                       f"Ocorreu um erro ao checar atualizações: {e}"))
+
+    threading.Thread(target=worker, daemon=True).start()

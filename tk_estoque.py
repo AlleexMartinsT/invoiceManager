@@ -21,7 +21,7 @@ class EstoqueApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # load state
-        self.settings = utils.load_settings()
+        #self.settings = utils.load_settings()
 
         # Main layout: left filters, main area (table), right actions (which will be a frame that swaps content)
         self.left_frame = customtkinter.CTkFrame(root, width=200)
@@ -361,7 +361,7 @@ class EstoqueApp:
         self.btn_cancel_form.pack(expand=True, fill="x", padx=4, pady=4)
 
     def _validate_nf(self, newval):
-        # allow only digits, dot and dash and empty
+        # allow only digits (1-9), dot and dash and empty
         if newval == "":
             return True
         for ch in newval:
@@ -379,6 +379,7 @@ class EstoqueApp:
 
     def on_add_ok(self):
         nf = self.entry_nf.get().strip()
+        nf = str(nf).lstrip('0')
         if not nf:
             messagebox.showwarning("Aviso", "Preencha o campo Nº NF.")
             return
@@ -832,10 +833,6 @@ class EstoqueApp:
             self.entry_nf.focus_set()
     
     def on_close(self):
-        # when main window close pressed (X)
-        if self.settings.get("ask_on_close", True):
-            if not messagebox.askyesno("Sair", "Tem certeza que deseja fechar?"):
-                return
         self.root.destroy()
 
     def _add_tooltip(self, iid, text):
@@ -909,6 +906,8 @@ class EstoqueApp:
 
 
 def main():
+    from utils_estoque import check_for_updates
     root = customtkinter.CTk()
+    check_for_updates(root)
     app = EstoqueApp(root)
     root.mainloop()

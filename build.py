@@ -1,5 +1,6 @@
 import PyInstaller.__main__
 import os
+from versionfile_generator import versionfile_generator
 
 # Nome do executável final
 APP_NAME = "Relatorio de Estoque"
@@ -30,11 +31,14 @@ for file in DATA_FILES:
     if os.path.exists(file):
         datas.append(f"{file}{os.pathsep}.")
 
+versionfile_generator()
+
 # Executa o PyInstaller
 PyInstaller.__main__.run([
     ENTRY_POINT,
     "--name", APP_NAME,
     "--icon", ICON,
+    "--version-file", "version.txt",
     "--noconsole",          # não abre terminal junto
     "--onefile",            # único executável
     "--clean",              # limpa build anterior
@@ -42,5 +46,6 @@ PyInstaller.__main__.run([
     "--hidden-import", "customtkinter",
     "--hidden-import", "PIL",
     "--hidden-import", "pytesseract",
+    
     *[f"--add-data={d}" for d in datas]
 ])
