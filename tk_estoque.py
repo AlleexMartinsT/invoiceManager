@@ -17,11 +17,8 @@ class EstoqueApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Relatório do Estoque")
-        self.root.geometry(self.center_geometry(1350, 800))
+        self.root.geometry(self.center_geometry(1450, 800))
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        # load state
-        #self.settings = utils.load_settings()
 
         # Main layout: left filters, main area (table), right actions (which will be a frame that swaps content)
         self.left_frame = customtkinter.CTkFrame(root, width=200)
@@ -66,50 +63,166 @@ class EstoqueApp:
     def _build_filters(self):
         make_label(self.left_frame, "Filtrar por:").pack(anchor="w", pady=(4, 6), padx=6)
 
+        # estado dos painéis (inicialmente fechados)
+        self.cnpj_expanded = False
+        self.adv_expanded = False
+        self.data_expanded = False
+        
+        # --- Header toggle DATA ---
+        self.btn_toggle_data = customtkinter.CTkButton(
+            self.left_frame,
+            text="▶ Data de Chegada",
+            anchor="w",
+            command=self.toggle_data_filters,
+            fg_color="#5ECC97",
+            hover_color="#6DEDAF",
+            corner_radius=6
+        )
+        self.btn_toggle_data.pack(fill="x", padx=6, pady=(4, 2))
+        
+        self.data_content_frame = customtkinter.CTkFrame(self.left_frame)
+        
+        # Conteúdo do filtro de Data
+        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(6, 0))
+        from tkcalendar import DateEntry
+        
+        self.date_from = DateEntry(
+            self.data_content_frame,
+            date_pattern="dd/MM/yyyy",
+            width=12,
+            background="black",
+            foreground="white",
+            borderwidth=2,
+            year=datetime.now().year,
+            month=datetime.now().month,
+            day=datetime.now().day
+        )
+        self.date_from.pack(fill="x", padx=6, pady=4)
+
+        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(6, 0))
+        self.date_to = DateEntry(
+            self.data_content_frame,
+            date_pattern="dd/MM/yyyy",
+            width=12,
+            background="black",
+            foreground="white",
+            borderwidth=2,
+            year=datetime.now().year,
+            month=datetime.now().month,
+            day=datetime.now().day
+        )
+        self.date_to.pack(fill="x", padx=6, pady=4)
+
+        # --- Header toggle CNPJ ---
+        self.btn_toggle_cnpj = customtkinter.CTkButton(
+            self.left_frame,
+            text="▶ CNPJ (EH / MVA)",
+            anchor="w",
+            command=self.toggle_cnpj_filters,
+            fg_color="#5ECC97",
+            hover_color="#6DEDAF",
+            corner_radius=6
+        )
+        self.btn_toggle_cnpj.pack(fill="x", padx=6, pady=(4, 2))
+
+        # frame que contém os controles de CNPJ (checkboxes)
+        self.cnpj_content_frame = customtkinter.CTkFrame(self.left_frame)
+
+        # vars e checkboxes (parent é o cnpj_content_frame)
         self.filter_vars = {"EH": tk.BooleanVar(value=True), "MVA": tk.BooleanVar(value=True)}
-        cb_eh = customtkinter.CTkCheckBox(self.left_frame, text="Horizonte", variable=self.filter_vars["EH"],
-                                         command=self.refresh_table, text_color="white")
-        cb_mva = customtkinter.CTkCheckBox(self.left_frame, text="MVA", variable=self.filter_vars["MVA"],
-                                          command=self.refresh_table, text_color="white")
+        cb_eh = customtkinter.CTkCheckBox(
+            self.cnpj_content_frame,
+            text="Horizonte",
+            variable=self.filter_vars["EH"],
+            command=self.refresh_table,
+            text_color="white"
+        )
+        cb_mva = customtkinter.CTkCheckBox(
+            self.cnpj_content_frame,
+            text="MVA",
+            variable=self.filter_vars["MVA"],
+            command=self.refresh_table,
+            text_color="white"
+        )
         cb_eh.pack(anchor="w", padx=6, pady=2)
         cb_mva.pack(anchor="w", padx=6, pady=2)
 
-        # filtros avançados: fornecedor / conferente / conferido status
-        make_label(self.left_frame, "Fornecedor:").pack(anchor="w", padx=6, pady=(8, 0))
+        # --- Header toggle filtros avançados ---
+        self.btn_toggle_adv = customtkinter.CTkButton(
+            self.left_frame,
+            text="▶ Filtros avançados",
+            anchor="w",
+            command=self.toggle_adv_filters,
+            fg_color="#5ECC97",
+            hover_color="#6DEDAF",
+            corner_radius=6
+        )
+        self.btn_toggle_adv.pack(fill="x", padx=6, pady=(4, 2))
+
+        # frame que contém os filtros avançados (fornecedor / conferente / status)
+        self.adv_content_frame = customtkinter.CTkFrame(self.left_frame)
+
+        # Fornecedor
+        make_label(self.adv_content_frame, "Fornecedor:").pack(anchor="w", pady=(6, 0))
         self.filter_fornecedor_var = customtkinter.StringVar(value="Todas")
-        self.filter_fornecedor_cb = customtkinter.CTkComboBox(self.left_frame, values=["Todas"] + self._supplier_names(),
-                                                             variable=self.filter_fornecedor_var, state="readonly", justify="center")
+        self.filter_fornecedor_cb = customtkinter.CTkComboBox(
+            self.adv_content_frame,
+            values=["Todas"] + self._supplier_names(),
+            variable=self.filter_fornecedor_var,
+            state="readonly",
+            justify="center"
+        )
         self.filter_fornecedor_cb.pack(fill="x", padx=6, pady=4)
 
-        make_label(self.left_frame, "Conferente:").pack(anchor="w", padx=6, pady=(8, 0))
+        # Conferente
+        make_label(self.adv_content_frame, "Conferente:").pack(anchor="w", pady=(4, 0))
         self.filter_conferente_var = customtkinter.StringVar(value="Todos")
-        self.filter_conferente_cb = customtkinter.CTkComboBox(self.left_frame, values=["Todos"] + self._conferente_names(),
-                                                              variable=self.filter_conferente_var, state="readonly", justify="center")
+        self.filter_conferente_cb = customtkinter.CTkComboBox(
+            self.adv_content_frame,
+            values=["Todos"] + self._conferente_names(),
+            variable=self.filter_conferente_var,
+            state="readonly",
+            justify="center"
+        )
         self.filter_conferente_cb.pack(fill="x", padx=6, pady=4)
 
-        make_label(self.left_frame, "Status conferência:").pack(anchor="w", padx=6, pady=(8, 0))
+        # Status conferência
+        make_label(self.adv_content_frame, "Status conferência:").pack(anchor="w", pady=(4, 0))
         self.filter_conferido_var = tk.StringVar(value="Todas")
         self.combo_filtro_conferido = customtkinter.CTkComboBox(
-            self.left_frame,
+            self.adv_content_frame,
             values=["Todas", "Notas conferidas", "Notas não conferidas"],
             variable=self.filter_conferido_var,
             state="readonly",
-            justify="center",
+            justify="center"
         )
         self.combo_filtro_conferido.pack(pady=4, padx=6, fill="x")
 
+        # Frame dos botões Aplicar / Limpar
+        self.frame_filters = customtkinter.CTkFrame(self.left_frame)
+        self.btn_apply_filters = customtkinter.CTkButton(
+            self.frame_filters,
+            text="Aplicar filtros",
+            command=self.refresh_table,
+            hover_color="#2b81e2",
+            fg_color="#4989d3"
+        )
+        self.btn_clear_filters = customtkinter.CTkButton(
+            self.frame_filters,
+            text="Limpar filtros",
+            command=self._clear_filters,
+            hover_color="#2b81e2",
+            fg_color="#4989d3"
+        )
+        # não dar pack ainda; só quando o painel for expandido
+        self.btn_apply_filters.pack(expand=True, fill="x", pady=4)
+        self.btn_clear_filters.pack(expand=True, fill="x", pady=4)
 
-        # Filter buttons
-        frame_filters = customtkinter.CTkFrame(self.left_frame)
-        frame_filters.pack(fill="x", padx=6, pady=(10, 4))
-        customtkinter.CTkButton(frame_filters, text="Aplicar filtros", command=self.refresh_table, hover_color="#2b81e2", fg_color="#4989d3").pack(expand=True, fill="x", padx=4, pady=4)
-        customtkinter.CTkButton(frame_filters, text="Limpar filtros", command=self._clear_filters, hover_color="#2b81e2", fg_color="#4989d3").pack(expand=True, fill="x", padx=4, pady=4)
-        
-        # quick actions
+        # --- quick actions (mantém a hierarquia / ordem original) ---
         customtkinter.CTkButton(self.left_frame, text="Adicionar Nota", command=self.show_add_form).pack(pady=(12, 6), padx=6, fill="x")
         customtkinter.CTkButton(self.left_frame, text="Gerenciar Fornecedores", command=self.show_manage_suppliers).pack(pady=6, padx=6, fill="x")
         customtkinter.CTkButton(self.left_frame, text="Gerenciar Conferentes", command=self.show_manage_conferentes).pack(pady=6, padx=6, fill="x")
-    
+
     def _clear_filters(self):
         self.filter_vars["EH"].set(True)
         self.filter_vars["MVA"].set(True)
@@ -123,7 +236,7 @@ class EstoqueApp:
         cols = ("nf", "data", "fornecedor", "conferente", "cnpj", "conferido")
         headings = {
             "nf": "Nota Fiscal",
-            "data": "Data",
+            "data": "Data de Chegada",
             "fornecedor": "Fornecedor",
             "conferente": "Recebida por",
             "cnpj": "CNPJ",
@@ -141,7 +254,7 @@ class EstoqueApp:
         
         for c in cols:
             self.tree.heading(c, text=headings[c], command=lambda _c=c: self._sort_by_column(_c, False))
-            self.tree.column(c, width=120, anchor="center", minwidth=80, stretch=True)
+            self.tree.column(c, width=130, anchor="center", minwidth=80, stretch=True)
 
         self.tree.pack(fill="both", expand=True, side="left")
         
@@ -187,6 +300,22 @@ class EstoqueApp:
         filtro_fornecedor = self.filter_fornecedor_var.get()
         filtro_conferente = self.filter_conferente_var.get()
         filtro_conferido = self.filter_conferido_var.get()
+
+        from datetime import datetime
+        # Se o painel de data estiver expandido e houver valores
+        if self.data_expanded:
+            try:
+                date_from = self.date_from.get_date()
+                date_to = self.date_to.get_date()
+                
+                notes = [
+                    n for n in notes
+                    if n.get("data_chegada")
+                    and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
+                ]
+            except Exception as e:
+                print("Erro ao filtrar por data:", e)
+
 
         for n in notes:
             if n.get("cnpj") not in enabled_cnpjs:
@@ -903,6 +1032,48 @@ class EstoqueApp:
         if self.tooltip:
             self.tooltip.destroy()
             self.tooltip = None
+
+    def toggle_cnpj_filters(self):
+        """Mostra/oculta o painel de CNPJ (EH / MVA)."""
+        if self.cnpj_expanded:
+            self.cnpj_content_frame.pack_forget()
+            self.btn_toggle_cnpj.configure(text="▶ CNPJ (EH / MVA)")
+            self.cnpj_expanded = False
+        else:
+            self.cnpj_content_frame.pack(fill="x", padx=6, pady=(2, 4))
+            self.btn_toggle_cnpj.configure(text="▼ CNPJ (EH / MVA)")
+            self.cnpj_expanded = True
+
+    def toggle_adv_filters(self):
+        """Mostra/oculta o painel de filtros avançados e os botões Aplicar/Limpar."""
+        if self.adv_expanded:
+            self.adv_content_frame.pack_forget()
+            self.btn_toggle_adv.configure(text="▶ Filtros avançados")
+            self.adv_expanded = False
+        else:
+            self.adv_content_frame.pack(fill="x", padx=6, pady=(2, 4))
+            self.btn_toggle_adv.configure(text="▼ Filtros avançados")
+            self.adv_expanded = True
+        self._update_filter_buttons()
+
+    def toggle_data_filters(self):
+        """Mostra/oculta o painel de Data de Chegada."""
+        if self.data_expanded:
+            self.data_content_frame.pack_forget()
+            self.btn_toggle_data.configure(text="▶ Data de Chegada")
+            self.data_expanded = False
+        else:
+            self.data_content_frame.pack(fill="x", padx=6, pady=(2, 4))
+            self.btn_toggle_data.configure(text="▼ Data de Chegada")
+            self.data_expanded = True
+        self._update_filter_buttons()
+
+    def _update_filter_buttons(self):
+        """Controla quando mostrar os botões Aplicar/Limpar filtros."""
+        if self.adv_expanded or self.data_expanded:
+            self.frame_filters.pack(fill="x", padx=6, pady=(6, 4))
+        else:
+            self.frame_filters.pack_forget()
 
 
 def main():
