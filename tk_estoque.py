@@ -13,6 +13,8 @@ customtkinter.set_appearance_mode("dark")
 def make_label(master, text, **kw):
     return customtkinter.CTkLabel(master, text=text, anchor="w", **kw)
 
+def pad_values(valores, largura=22):
+            return [v.ljust(largura) for v in valores]
 class EstoqueApp:
     def __init__(self, root):
         self.root = root
@@ -20,28 +22,32 @@ class EstoqueApp:
         self.root.geometry(self.center_geometry(1450, 800))
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Main layout: left filters, main area (table), right actions (which will be a frame that swaps content)
+        # Main layout: left é os filtros, main area (table), right é as ações (que muda baseado no left)
         self.left_frame = customtkinter.CTkFrame(root, width=200)
         self.left_frame.pack(side="left", fill="y", padx=8, pady=8)
 
         self.main_frame = customtkinter.CTkFrame(root)
         self.main_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        
+        self.search_frame = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
+        self.search_frame.pack(fill="x", padx=6, pady=(0, 6))
 
         self.actions_frame = customtkinter.CTkFrame(root, width=300)
         self.actions_frame.pack(side="right", fill="x", padx=8, pady=8)
 
-        # Build UI parts6
+        # monta os componentes da interface
         self._build_filters()
         self._build_table()
         self._build_actions_stack()
 
-        # Populate initial data
-        self.refresh_table()
-        self.update_recent_list()
+        # preenche a tabela logo após a janela criar (melhora sensação de inicialização)
+        self.root.after(60, self.refresh_table)
+        self.root.after(120, self.update_recent_list)
 
         # Key bindings
         self.root.bind("<Escape>", self._handle_escape)
         self._setup_tooltip_support()
+        self._bind_search_suggestions()
 
     def _handle_escape(self, event=None):
         current_page = [k for k, p in self.pages.items() if p.winfo_manager()]
@@ -59,8 +65,48 @@ class EstoqueApp:
         y = (sh - h) // 2
         return f"{w}x{h}+{x}+{y}"
 
-    # ---------------- Filters ----------------
+            # ---------------- Filters ----------------
+    
     def _build_filters(self):
+        self.search_entry = customtkinter.CTkEntry(
+            self.search_frame,
+            placeholder_text="Pesquisar...",
+            text_color="white",
+            justify="left",
+            width=200
+        )
+        self.search_entry.pack(side="left", padx=(0, 6))
+
+        self.search_option = customtkinter.StringVar(value="Nota Fiscal")
+        self.search_combo = customtkinter.CTkComboBox(
+            self.search_frame,
+            values=["NF", "Fornecedor"],
+            variable=self.search_option,
+            state="readonly",
+            width=120
+        )
+        self.search_combo.pack(side="left", padx=(0, 6))
+
+        self.btn_search = customtkinter.CTkButton(
+            self.search_frame,
+            text="Buscar",
+            command=self._search_notes,
+            width=80,
+            fg_color="#4989d3",
+            hover_color="#2b81e2"
+        )
+        self.btn_search.pack(side="left", padx=(0, 6))
+
+        self.btn_clear_search = customtkinter.CTkButton(
+            self.search_frame,
+            text="Limpar",
+            command=self.refresh_table,
+            width=80,
+            fg_color="#777777",
+            hover_color="#555555"
+        )
+        self.btn_clear_search.pack(side="left")
+        
         make_label(self.left_frame, "Filtrar por:").pack(anchor="w", pady=(4, 6), padx=6)
 
         # estado dos painéis (inicialmente fechados)
@@ -231,8 +277,48 @@ class EstoqueApp:
         self.filter_conferido_var.set("Todas")
         self.refresh_table()
     
+    def _apply_filters(self, notes):
+        """Aplica todos os filtros (CNPJ, datas, avançados)."""
+        enabled_cnpjs = [k for k, v in self.filter_vars.items() if v.get()]
+        filtro_fornecedor = self.filter_fornecedor_var.get()
+        filtro_conferente = self.filter_conferente_var.get()
+        filtro_conferido = self.filter_conferido_var.get()
+
+        # Filtro de Data
+        if self.data_expanded:
+            try:
+                date_from = self.date_from.get_date()
+                date_to = self.date_to.get_date()
+                notes = [
+                    n for n in notes
+                    if n.get("data_chegada")
+                    and date_from <= datetime.strptime(n["data_chegada"], "%Y-%m-%d").date() <= date_to
+                ]
+            except Exception as e:
+                print("Erro ao filtrar por data:", e)
+
+        # Filtro de CNPJs
+        notes = [n for n in notes if n.get("cnpj") in enabled_cnpjs]
+
+        # Filtro de fornecedor
+        if filtro_fornecedor and filtro_fornecedor != "Todas":
+            notes = [n for n in notes if n.get("fornecedor_name") == filtro_fornecedor]
+
+        # Filtro de conferente
+        if filtro_conferente and filtro_conferente != "Todos":
+            notes = [n for n in notes if n.get("conferente_name") == filtro_conferente]
+
+        # Filtro de conferência
+        if filtro_conferido == "Notas conferidas":
+            notes = [n for n in notes if n.get("conferido", False)]
+        elif filtro_conferido == "Notas não conferidas":
+            notes = [n for n in notes if not n.get("conferido", False)]
+
+        return notes
+
     # ---------------- Table ----------------
     def _build_table(self):
+
         cols = ("nf", "data", "fornecedor", "conferente", "cnpj", "conferido")
         headings = {
             "nf": "Nota Fiscal",
@@ -291,69 +377,19 @@ class EstoqueApp:
         self.tree.heading(col, command=lambda: self._sort_by_column(col, not reverse))
     
     def refresh_table(self):
-        # repopulate tree from notes applying filters
+        """Repopula a treeview aplicando os filtros (sem duplicar entradas)."""
+        # limpa a tree
         for it in self.tree.get_children():
             self.tree.delete(it)
-        notes = utils.load_notes()  # list of dicts
-        enabled_cnpjs = [k for k, v in self.filter_vars.items() if v.get()]
 
-        filtro_fornecedor = self.filter_fornecedor_var.get()
-        filtro_conferente = self.filter_conferente_var.get()
-        filtro_conferido = self.filter_conferido_var.get()
+        # carrega e aplica filtros
+        notes = utils.load_notes()
+        notes = self._apply_filters(notes)
 
-        from datetime import datetime
-        # Se o painel de data estiver expandido e houver valores
-        if self.data_expanded:
-            try:
-                date_from = self.date_from.get_date()
-                date_to = self.date_to.get_date()
-                
-                notes = [
-                    n for n in notes
-                    if n.get("data_chegada")
-                    and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
-                ]
-            except Exception as e:
-                print("Erro ao filtrar por data:", e)
+        # popula a tabela apenas UMA vez
+        self._populate_table(notes)
 
-
-        for n in notes:
-            if n.get("cnpj") not in enabled_cnpjs:
-                continue
-            if filtro_fornecedor and filtro_fornecedor != "Todas" and n.get("fornecedor_name") != filtro_fornecedor:
-                continue
-            if filtro_conferente and filtro_conferente != "Todos" and n.get("conferente_name") != filtro_conferente:
-                continue
-
-            # --- filtro conferido (coluna 6) ---
-            conferido_flag = n.get("conferido", False)
-            if filtro_conferido == "Notas conferidas" and not conferido_flag:
-                continue
-            if filtro_conferido == "Notas não conferidas" and conferido_flag:
-                continue
-
-            data_display = n.get("data_chegada") or n.get("created_at", "")[:10]
-            # convert data_display to DD-MM-YYYY for display if in ISO
-            try:
-                d = datetime.fromisoformat(data_display)
-                data_display = d.strftime("%d-%m-%Y")
-            except Exception:
-                pass  # se já estiver no formato dd-mm-yyyy
-
-            conferido_display = "✔" if conferido_flag else ""
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    n.get("nf_number"),
-                    data_display,
-                    n.get("fornecedor_name"),
-                    n.get("conferente_name"),
-                    n.get("cnpj"),
-                    conferido_display
-                )
-            )
-
+        # atualiza a lista de recentes
         self.update_recent_list()
 
     def _build_actions_stack(self):
@@ -416,6 +452,35 @@ class EstoqueApp:
 
         customtkinter.CTkButton(parent, text="Atualizar tabela", command=self.refresh_table).pack(fill="x", padx=8, pady=6)
 
+    def _populate_table(self, notes):
+        """Limpa e popula a tabela com a lista de notas."""
+        for it in self.tree.get_children():
+            self.tree.delete(it)
+
+        for n in notes:
+            data_display = n.get("data_chegada") or n.get("created_at", "")[:10]
+            try:
+                d = datetime.strptime(data_display, "%Y-%m-%d")
+                data_display = d.strftime("%d-%m-%Y")
+            except Exception:
+                pass
+
+            conferido_display = "✔" if n.get("conferido", False) else ""
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    n.get("nf_number"),
+                    data_display,
+                    n.get("fornecedor_name"),
+                    n.get("conferente_name"),
+                    n.get("cnpj"),
+                    conferido_display
+                )
+            )
+
+        self.update_recent_list()
+
     # ---------------- Add form ----------------
     def _build_add_form(self, parent):
         make_label(parent, "Nº NF:").pack(anchor="center", padx=6, pady=(8, 0))
@@ -433,7 +498,7 @@ class EstoqueApp:
         self.supplier_var = customtkinter.StringVar()
         self.combobox_supplier = customtkinter.CTkComboBox(
             parent,
-            values=self._supplier_names(),
+            values=pad_values(self._supplier_names()),
             variable=self.supplier_var,
             text_color="white",
             justify="center",
@@ -453,13 +518,26 @@ class EstoqueApp:
             width=150
         )
         self.entry_date.pack(fill="x", padx=6, pady=4)
+        
+        #----------------- Data de Emissão ----------------
+        make_label(parent, "Data de Emissão:").pack(anchor="center", padx=6, pady=(8, 0))
+        self.date_emissao_var = customtkinter.StringVar(value="")  # <-- dd-mm-yyyy
+        self.entry_date_emissao = customtkinter.CTkEntry(
+            parent, 
+            textvariable=self.date_emissao_var, 
+            text_color="white", 
+            justify="center",
+            width=150
+        )
+        self.entry_date_emissao.pack(fill="x", padx=6, pady=4)
 
         # ---------------- CNPJ ----------------
         make_label(parent, "CNPJ:").pack(anchor="center", padx=6, pady=(8, 0))
         self.cnpj_var = customtkinter.StringVar(value="")
+        
         self.combo_cnpj = customtkinter.CTkComboBox(
             parent, 
-            values=["EH", "MVA"], 
+            values=pad_values(["EH", "MVA"]), 
             variable=self.cnpj_var, 
             text_color="white", 
             justify="center", 
@@ -473,7 +551,7 @@ class EstoqueApp:
         self.conferente_var = customtkinter.StringVar()
         self.combo_conferente = customtkinter.CTkComboBox(
             parent, 
-            values=self._conferente_names(),
+            values=pad_values(self._conferente_names()),
             variable=self.conferente_var, 
             text_color="white", 
             justify="center", 
@@ -507,22 +585,34 @@ class EstoqueApp:
         return [c["name"] for c in conferentes]
 
     def on_add_ok(self):
+        
         nf = self.entry_nf.get().strip()
         nf = str(nf).lstrip('0')
+        
         if not nf:
             messagebox.showwarning("Aviso", "Preencha o campo Nº NF.")
             return
+        
         fornecedor = self.supplier_var.get()
         conferente = self.conferente_var.get()
+        
         if not fornecedor or not conferente:
             messagebox.showwarning("Aviso", "Selecione fornecedor e conferente.")
             return
+        
         data_chegada = self.date_var.get().strip() or utils.today_br()
+        data_emissao = self.date_emissao_var.get().strip() or ""
+        
+        max_length = 10
+        if len(data_chegada) > max_length or (len(data_emissao) > max_length and data_emissao):
+            messagebox.showwarning("Aviso", f"A data não pode ter mais que {max_length} caracteres.")
+            return
         try:
             datetime.strptime(data_chegada, "%d-%m-%Y")
         except Exception:
             messagebox.showwarning("Aviso", "Data inválida. Use DD-MM-YYYY.")
             return
+        
         cnpj = self.cnpj_var.get()
 
         suppliers = utils.load_suppliers()
@@ -535,6 +625,7 @@ class EstoqueApp:
             "fornecedor_id": s.get("id"),
             "fornecedor_name": s.get("name"),
             "data_chegada": data_chegada,
+            "data_emissao": data_emissao,
             "cnpj": cnpj,
             "conferente_id": c.get("id"),
             "conferente_name": c.get("name"),
@@ -850,7 +941,7 @@ class EstoqueApp:
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
         dialog.title("Editar Nota")
-        dialog.geometry("320x360")
+        dialog.geometry("320x420")
         dialog.grab_set()
 
         make_label(dialog, "Nº NF:").pack(anchor="w", padx=8, pady=(8,0))
@@ -862,6 +953,11 @@ class EstoqueApp:
         date_var = customtkinter.StringVar(value=n.get("data_chegada") or utils.today_br())
         date_entry = customtkinter.CTkEntry(dialog, textvariable=date_var, text_color="white", justify="center", width=100)
         date_entry.pack(fill="x", padx=8, pady=4)
+        
+        make_label(dialog, "Data de Emissão:").pack(anchor="w", padx=8, pady=(4,0))
+        date_emissao_var = customtkinter.StringVar(value=n.get("data_emissao") or "")
+        date_emissao_entry = customtkinter.CTkEntry(dialog, textvariable=date_emissao_var, text_color="white", justify="center", width=100)
+        date_emissao_entry.pack(fill="x", padx=8, pady=4)
 
         make_label(dialog, "Fornecedor:").pack(anchor="w", padx=8, pady=(4,0))
         sup_var = customtkinter.StringVar(value=n.get("fornecedor_name"))
@@ -887,6 +983,7 @@ class EstoqueApp:
                 if str(item.get("nf_number")) == str(n.get("nf_number")):
                     item["nf_number"] = nf_new
                     item["data_chegada"] = d
+                    item["data_emissao"] = date_emissao_var.get().strip()
                     item["fornecedor_name"] = sup_var.get()
                     item["conferente_name"] = conf_var.get()
                     edited = True
@@ -918,6 +1015,27 @@ class EstoqueApp:
         self.refresh_table()
         messagebox.showinfo("Sucesso", "Nota removida.")
     
+    def _search_notes(self):
+        termo = self.search_entry.get().strip().lower()
+        if not termo:
+            self.refresh_table()
+            return
+
+        filtro_tipo = self.search_option.get()
+        notes = utils.load_notes()
+
+        # aplica os filtros normais primeiro
+        notes = self._apply_filters(notes)
+
+        # agora filtra pela pesquisa
+        if filtro_tipo == "Nota Fiscal":
+            notes = [n for n in notes if termo in str(n.get("nf_number", "")).lower()]
+        elif filtro_tipo == "Fornecedor":
+            notes = [n for n in notes if termo in str(n.get("fornecedor_name", "")).lower()]
+
+        # repopula a tabela
+        self._populate_table(notes)
+
     # ---------------- Helpers ----------------
     
     def show_add_form(self):
@@ -964,21 +1082,6 @@ class EstoqueApp:
     def on_close(self):
         self.root.destroy()
 
-    def _add_tooltip(self, iid, text):
-        
-        def on_enter(event, iid=iid, txt=text):
-            x, y, _, _ = self.tree.bbox(iid, column="conferido")
-            x += self.tree.winfo_rootx()
-            y += self.tree.winfo_rooty()
-            self.tooltip = tk.Toplevel(self.tree)
-            self.tooltip.wm_overrideredirect(True)
-            self.tooltip.wm_geometry(f"+{x+40}+{y}")
-            tk.Label(self.tooltip, text=txt, background="black", foreground="white", padx=4, pady=2).pack()
-        def on_leave(event):
-            if hasattr(self, "tooltip"):
-                self.tooltip.destroy()
-                self.tooltip = None
-
     def _setup_tooltip_support(self):
         self.tooltip = None
         self.tree.bind("<Motion>", self._on_motion)
@@ -993,24 +1096,42 @@ class EstoqueApp:
         row_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
 
-        # Conferência é a 6ª coluna (#6)
-        if not row_id or col_id != "#6":
-            self._hide_tooltip()
-            return
-
         values = self.tree.item(row_id, "values")
-        if len(values) < 6 or values[5] != "✔":
+        if not row_id or not values:
             self._hide_tooltip()
             return
 
-        nf_number = values[0]
-        notes = utils.load_notes()
-        note = next((n for n in notes if n["nf_number"] == nf_number), None)
-        if not note:
+        # --- Tooltip de conferência (coluna 6) ---
+        if col_id == "#6":
+            if len(values) < 6 or values[5] != "✔":
+                self._hide_tooltip()
+                return
+            nf_number = values[0]
+            notes = utils.load_notes()
+            note = next((n for n in notes if n["nf_number"] == nf_number), None)
+            if not note:
+                return
+            texto = f'{note.get("conferido_por", "?")} em {note.get("conferido_em", "?")}'
+            self._show_tooltip(event, texto)
             return
 
-        texto = f'{note.get("conferido_por", "?")} em {note.get("conferido_em", "?")}'
-        self._show_tooltip(event, texto)
+        # --- Tooltip de data de emissão (coluna 2 - Data de Chegada) ---
+        if col_id == "#2":
+            nf_number = values[0]
+            notes = utils.load_notes()
+            note = next((n for n in notes if n["nf_number"] == nf_number), None)
+            if not note:
+                return
+            data_emissao = note.get("data_emissao")
+            if not data_emissao:
+                self._hide_tooltip()
+                return
+            texto = f"Data de emissão: {data_emissao}"
+            self._show_tooltip(event, texto)
+            return
+
+        # Se não for conferência nem data emissão → esconde
+        self._hide_tooltip()
 
     def _show_tooltip(self, event, text):
         if self.tooltip:
@@ -1076,9 +1197,77 @@ class EstoqueApp:
             self.frame_filters.pack_forget()
 
 
-def main():
+        if not hasattr(self, "suggestion_box"):
+            return
+        selection = self.suggestion_box.curselection()
+        if selection:
+            valor = self.suggestion_box.get(selection[0])
+            self.search_entry.delete(0, "end")
+            self.search_entry.insert(0, valor)
+            self.suggestion_box.destroy()
+            self._search_notes()
+
+    def _bind_search_suggestions(self):
+        self.search_entry.bind("<KeyRelease>", self._update_suggestions)
+        self.search_entry.bind("<FocusOut>", lambda e: self.root.after(100, self._hide_suggestions))
+
+    def _update_suggestions(self, event):
+        termo = self.search_entry.get().strip().lower()
+        filtro_tipo = self.search_option.get()
+
+        notes = utils.load_notes()
+        notes = self._apply_filters(notes)
+
+        if filtro_tipo == "Nota Fiscal":
+            valores = [str(n.get("nf_number", "")) for n in notes]
+        else:
+            valores = [str(n.get("fornecedor_name", "")) for n in notes]
+
+        sugestoes = sorted(set([v for v in valores if termo in v.lower()]))[:8]
+
+        self._hide_suggestions()
+        if not termo or not sugestoes:
+            return
+
+        # criar janela flutuante logo abaixo do entry
+        x = self.search_entry.winfo_rootx()
+        y = self.search_entry.winfo_rooty() + self.search_entry.winfo_height()
+
+        self.suggestion_win = tk.Toplevel(self.root)
+        self.suggestion_win.wm_overrideredirect(True)  # sem bordas
+        self.suggestion_win.geometry(f"+{x}+{y}")
+        self.suggestion_win.configure(bg="#2b2b2b")  # fundo escuro
+
+        for s in sugestoes:
+            lbl = customtkinter.CTkLabel(
+                self.suggestion_win,
+                text=s,
+                anchor="w",
+                fg_color="transparent"
+            )
+            lbl.pack(fill="x", padx=4, pady=2)
+
+            # ao clicar, seleciona
+            lbl.bind("<Button-1>", lambda e, val=s: self._select_suggestion(val))
+
+    def _select_suggestion(self, value):
+        self.search_entry.delete(0, "end")
+        self.search_entry.insert(0, value)
+        self._hide_suggestions()
+        self._search_notes()
+
+    def _hide_suggestions(self):
+        if hasattr(self, "suggestion_win") and self.suggestion_win.winfo_exists():
+            self.suggestion_win.destroy()
+
+import time
+
+if __name__ == "__main__":
+    start_time = time.perf_counter()
     from utils_estoque import check_for_updates
     root = customtkinter.CTk()
     check_for_updates(root)
     app = EstoqueApp(root)
+    end_time = time.perf_counter()
+    print(f"⏱ Aplicativo carregado em {end_time - start_time:.2f} segundos")
     root.mainloop()

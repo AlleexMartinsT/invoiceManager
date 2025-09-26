@@ -1,13 +1,18 @@
 # utils_estoque.py
 import os
 import sys
-import requests
+import json
 from datetime import datetime
 from supabase import create_client
 
 # ---------------- Configuração do Supabase ----------------
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://jouphkenfywomlryztle.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpvdXBoa2VuZnl3b21scnl6dGxlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg2NDc1MzcsImV4cCI6MjA3NDIyMzUzN30.tRs9ycQPxAbxwXOQWaObM2gSFiBOnDA_nkJtJv85kzk")
+config_path = os.path.join("data", "credentials.json")
+
+with open(config_path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+    
+SUPABASE_URL = config.get("SUPABASE_URL")
+SUPABASE_KEY = config.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------------- Fornecedores ----------------
@@ -112,7 +117,7 @@ def check_for_updates(root):
                                 "Feche o app, substitua o arquivo atual por esse novo e reinicie.")
                         except Exception as e:
                             messagebox.showerror("Erro no Download", f"Ocorreu um erro: {e}")
-                root.after(0, ask_user)  # root é sua janela Tk principal
+                root.after(0, ask_user)
             else:
                 print("App atualizado.")
 

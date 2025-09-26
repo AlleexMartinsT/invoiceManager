@@ -6,19 +6,18 @@ from versionfile_generator import versionfile_generator
 APP_NAME = "Relatorio de Estoque"
 
 # Arquivo principal (menu inicial)
-ENTRY_POINT = "main.py"  # ajuste se o seu ponto de entrada for outro
+ENTRY_POINT = "tk_estoque.py" 
 
 # Ícone
-ICON = "icone.ico"  # troque se estiver em outro local
+ICON = "icone.ico"
 
 # Pastas de dados (serão copiadas para dentro do .exe)
 DATA_FOLDERS = [
-    "data",         # ex: basedTheme.json
+    "data",       # pasta com imagens e outros assets
 ]
 
 # Arquivos individuais que precisam estar junto
 DATA_FILES = [
-    "tk_estoque.py",
     "utils_estoque.py",
 ]
 
@@ -39,7 +38,7 @@ PyInstaller.__main__.run([
     "--name", APP_NAME,
     "--icon", ICON,
     "--version-file", "version.txt",
-    "--noconsole",          # não abre terminal junto
+    # "--noconsole",        # não abre terminal junto
     "--onefile",            # único executável
     "--clean",              # limpa build anterior
     "--hidden-import", "tkinter",
