@@ -35,6 +35,9 @@ class EstoqueApp:
         self.actions_frame = customtkinter.CTkFrame(root, width=300)
         self.actions_frame.pack(side="right", fill="x", padx=8, pady=8)
 
+        # carrega configurações locais
+        self.settings = utils.load_settings()
+
         # monta os componentes da interface
         self._build_filters()
         self._build_table()
@@ -43,12 +46,13 @@ class EstoqueApp:
         # preenche a tabela logo após a janela criar (melhora sensação de inicialização)
         self.root.after(60, self.refresh_table)
         self.root.after(120, self.update_recent_list)
+        self.root.after(120, self.warning_month_filter)
 
         # Key bindings
         self.root.bind("<Escape>", self._handle_escape)
         self._setup_tooltip_support()
         self._bind_search_suggestions()
-
+    
     def _handle_escape(self, event=None):
         current_page = [k for k, p in self.pages.items() if p.winfo_manager()]
         if current_page and current_page[0] != "home":
@@ -67,13 +71,33 @@ class EstoqueApp:
 
             # ---------------- Filters ----------------
     
+    def warning_month_filter(self):
+        if not self.settings.get("visualizar_todos_meses", False):
+            import locale 
+            locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
+            messagebox.showinfo(
+                "Aviso",
+                f"Dados filtrados do mês de {datetime.now().strftime('%B').capitalize()}/{datetime.now().year}.\n"
+                "Para visualizar todos os meses, acesse as Configurações."
+            )
+        else:
+            return
+    
     def _build_filters(self):
+        import customtkinter as ctk
+        
+        self.search_var = ctk.StringVar()
+        self.search_var.trace_add("write", self.update_entry_width)
+        
         self.search_entry = customtkinter.CTkEntry(
             self.search_frame,
             placeholder_text="Pesquisar...",
             text_color="white",
             justify="left",
-            width=200
+            textvariable=self.search_var,
+            width=30,
+            corner_radius=6,
+            border_color="#F5F2F2"
         )
         self.search_entry.pack(side="left", padx=(0, 6))
 
@@ -83,7 +107,10 @@ class EstoqueApp:
             values=["NF", "Fornecedor"],
             variable=self.search_option,
             state="readonly",
-            width=120
+            width=120,
+            justify='center',
+            corner_radius=6,
+            border_width=1
         )
         self.search_combo.pack(side="left", padx=(0, 6))
 
@@ -292,7 +319,7 @@ class EstoqueApp:
                 notes = [
                     n for n in notes
                     if n.get("data_chegada")
-                    and date_from <= datetime.strptime(n["data_chegada"], "%Y-%m-%d").date() <= date_to
+                    and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
                 ]
             except Exception as e:
                 print("Erro ao filtrar por data:", e)
@@ -316,6 +343,11 @@ class EstoqueApp:
 
         return notes
 
+    def update_entry_width(self, *args):
+        text = self.search_var.get()
+        # largura base + multiplicador de caracteres
+        new_width = 50 + len(text) * 8
+        self.search_entry.configure(width=min(new_width, 400) - 50)
     # ---------------- Table ----------------
     def _build_table(self):
 
@@ -377,25 +409,44 @@ class EstoqueApp:
         self.tree.heading(col, command=lambda: self._sort_by_column(col, not reverse))
     
     def refresh_table(self):
-        """Repopula a treeview aplicando os filtros (sem duplicar entradas)."""
-        # limpa a tree
         for it in self.tree.get_children():
             self.tree.delete(it)
 
-        # carrega e aplica filtros
         notes = utils.load_notes()
         notes = self._apply_filters(notes)
-
-        # popula a tabela apenas UMA vez
+        # >>> FILTRO DO MÊS ATUAL <<<
+        if not self.settings.get("visualizar_todos_meses", False):
+            mes_atual = datetime.now().month
+            ano_atual = datetime.now().year
+            notes = [
+                n for n in notes
+                if n.get("data_chegada")
+                and datetime.strptime(n["data_chegada"], "%d-%m-%Y").month == mes_atual
+                and datetime.strptime(n["data_chegada"], "%d-%m-%Y").year == ano_atual
+            ]
         self._populate_table(notes)
-
-        # atualiza a lista de recentes
         self.update_recent_list()
 
     def _build_actions_stack(self):
         self.pages = {}
-
-        # Top image present on all pages
+        
+        # --- ÍCONE CONFIG ---
+        cfg_icon_path = os.path.join(os.path.dirname(__file__), "data", "config.png")
+        if os.path.exists(cfg_icon_path):
+            from PIL import Image
+            pil_cfg = Image.open(cfg_icon_path)
+            self.img_cfg = customtkinter.CTkImage(pil_cfg, size=(22, 22))
+            btn_cfg = customtkinter.CTkButton(
+                self.search_frame,
+                image=self.img_cfg,
+                text="",
+                width=30,
+                height=30,
+                fg_color="transparent",
+                command=self.show_settings_page
+            )
+            btn_cfg.place(relx=1.0, x=0, y=0, anchor="ne") 
+        
         img_path = os.path.join(os.path.dirname(__file__), "data", "logo.png")
         if os.path.exists(img_path):
             try:
@@ -418,12 +469,14 @@ class EstoqueApp:
         self.pages["add_form"] = customtkinter.CTkFrame(self.page_container)
         self.pages["manage_suppliers"] = customtkinter.CTkFrame(self.page_container)
         self.pages["manage_conferentes"] = customtkinter.CTkFrame(self.page_container)
+        self.pages["settings"] = customtkinter.CTkFrame(self.page_container)
 
         # construir conteúdos
         self._build_home(self.pages["home"])
         self._build_add_form(self.pages["add_form"])
         self._build_manage_suppliers(self.pages["manage_suppliers"])
         self._build_manage_conferentes(self.pages["manage_conferentes"])
+        self._build_settings_page(self.pages["settings"])
 
         # Página inicial
         self.show_page("home")
@@ -481,6 +534,48 @@ class EstoqueApp:
 
         self.update_recent_list()
 
+# ---------------- Settings Page ----------------
+    
+    def _build_settings_page(self, parent):
+            make_label(parent, "Configurações", font=("Segoe UI", 15, "bold")).pack(pady=(10, 6))
+            self.var_all_months = tk.BooleanVar(value=self.settings.get("visualizar_todos_meses", False))
+            cb = customtkinter.CTkCheckBox(
+                parent,
+                text="Visualizar todos os meses deste ano",
+                text_color="white",
+                variable=self.var_all_months,
+                command=self._toggle_all_months
+            )
+            cb.pack(anchor="w", padx=12, pady=6)
+            customtkinter.CTkButton(parent, text="Voltar", command=lambda: self.show_page("home")).pack(pady=20)
+
+    def _toggle_all_months(self):
+        self.settings["visualizar_todos_meses"] = self.var_all_months.get()
+        utils.save_settings(self.settings)
+        self.refresh_table()
+    
+    def show_settings_page(self):
+        # cria nova janela
+        win = customtkinter.CTkToplevel(self.root)
+        win.title("Configurações")
+        win.geometry(self.center_geometry(350,200))  # largura x altura, ajuste como quiser
+        win.grab_set()  # bloqueia interação com a janela principal até fechar
+        win.focus()
+
+        make_label(win, "Configurações", font=("Segoe UI", 15, "bold")).pack(pady=(10, 6))
+
+        self.var_all_months = tk.BooleanVar(value=self.settings.get("visualizar_todos_meses", False))
+        cb = customtkinter.CTkCheckBox(
+            win,
+            text="Visualizar todos os meses deste ano",
+            variable=self.var_all_months,
+            command=self._toggle_all_months,
+            text_color="white"
+        )
+        cb.pack(anchor="center", padx=12, pady=6)
+
+        customtkinter.CTkButton(win, text="Fechar", command=win.destroy).pack(pady=20)
+
     # ---------------- Add form ----------------
     def _build_add_form(self, parent):
         make_label(parent, "Nº NF:").pack(anchor="center", padx=6, pady=(8, 0))
@@ -534,7 +629,6 @@ class EstoqueApp:
         # ---------------- CNPJ ----------------
         make_label(parent, "CNPJ:").pack(anchor="center", padx=6, pady=(8, 0))
         self.cnpj_var = customtkinter.StringVar(value="")
-        
         self.combo_cnpj = customtkinter.CTkComboBox(
             parent, 
             values=pad_values(["EH", "MVA"]), 
@@ -732,14 +826,14 @@ class EstoqueApp:
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
         dialog.title("Remover Fornecedor")
-        dialog.geometry("360x140")
+        dialog.geometry(self.center_geometry(360, 140))
         dialog.grab_set()
 
         make_label(dialog, "Selecione o fornecedor:").pack(pady=(10, 5))
 
         var = customtkinter.StringVar(value="")
-        combo = customtkinter.CTkComboBox(dialog, values=[f'{s["id"]} - {s["name"]}' for s in suppliers],
-                                          variable=var, state="readonly", width=150, justify="center")
+        combo = customtkinter.CTkComboBox(dialog, values=[f'{s["name"]}' for s in suppliers],
+                                          variable=var, state="readonly", width=150, justify="center", height=150)
         combo.pack(pady=10)
 
         def confirm_remove():
@@ -811,13 +905,13 @@ class EstoqueApp:
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
         dialog.title("Remover Conferente")
-        dialog.geometry("360x140")
+        dialog.geometry(self.center_geometry(360, 140))
         dialog.grab_set()
 
         make_label(dialog, "Selecione o conferente para remover:").pack(pady=(10, 5))
 
         var = customtkinter.StringVar(value="")
-        combo = customtkinter.CTkComboBox(dialog, values=[f'{c["id"]} - {c["name"]}' for c in conferentes],
+        combo = customtkinter.CTkComboBox(dialog, values=[f'{c["name"]}' for c in conferentes],
                                           variable=var, state="readonly", width=150)
         combo.pack(pady=10)
 
@@ -891,7 +985,7 @@ class EstoqueApp:
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
         dialog.title("Marcar como conferido")
-        dialog.geometry("360x250")
+        dialog.geometry(self.center_geometry(360, 250))
         dialog.grab_set()
 
         make_label(dialog, f"Nota: {n.get('nf_number')}").pack(pady=(8,4), padx=8)
@@ -941,7 +1035,7 @@ class EstoqueApp:
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
         dialog.title("Editar Nota")
-        dialog.geometry("320x420")
+        dialog.geometry(self.center_geometry(320, 420))
         dialog.grab_set()
 
         make_label(dialog, "Nº NF:").pack(anchor="w", padx=8, pady=(8,0))
@@ -1263,11 +1357,8 @@ class EstoqueApp:
 import time
 
 if __name__ == "__main__":
-    start_time = time.perf_counter()
     from utils_estoque import check_for_updates
     root = customtkinter.CTk()
     check_for_updates(root)
     app = EstoqueApp(root)
-    end_time = time.perf_counter()
-    print(f"⏱ Aplicativo carregado em {end_time - start_time:.2f} segundos")
     root.mainloop()

@@ -5,16 +5,6 @@ import json
 from datetime import datetime
 from supabase import create_client
 
-# ---------------- Configuração do Supabase ----------------
-config_path = os.path.join("data", "credentials.json")
-
-with open(config_path, "r", encoding="utf-8") as f:
-    config = json.load(f)
-    
-SUPABASE_URL = config.get("SUPABASE_URL")
-SUPABASE_KEY = config.get("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 # ---------------- Fornecedores ----------------
 def load_suppliers():
     resp = supabase.table("suppliers").select("*").order("name").execute() # Ordenando por nome
@@ -81,6 +71,34 @@ def resource_path(relative_path: str):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+config_path = resource_path(os.path.join("data", "credentials.json"))
+
+with open(config_path, "r", encoding="utf-8") as f:
+    config = json.load(f)
+    
+SUPABASE_URL = config.get("SUPABASE_URL")
+SUPABASE_KEY = config.get("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ---------------- Settings ----------------
+
+def settings_path():
+    appdata = os.getenv("APPDATA") or os.path.expanduser("~")
+    cfg_dir = os.path.join(appdata, "RelatorioEstoque")
+    os.makedirs(cfg_dir, exist_ok=True)
+    return os.path.join(cfg_dir, "settings.json")
+
+def load_settings():
+    path = settings_path()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"visualizar_todos_meses": False}  # default
+
+def save_settings(settings: dict):
+    with open(settings_path(), "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
 
 # ---------------- Update Checker ----------------
     

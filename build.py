@@ -38,7 +38,7 @@ PyInstaller.__main__.run([
     "--name", APP_NAME,
     "--icon", ICON,
     "--version-file", "version.txt",
-    # "--noconsole",        # não abre terminal junto
+    "--noconsole",        # não abre terminal junto
     "--onefile",            # único executável
     "--clean",              # limpa build anterior
     "--hidden-import", "tkinter",
