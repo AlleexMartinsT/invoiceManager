@@ -15,6 +15,54 @@ def make_label(master, text, **kw):
 
 def pad_values(valores, largura=22):
             return [v.ljust(largura) for v in valores]
+        
+class Toast(customtkinter.CTkToplevel):
+    active_toasts = []
+
+    def __init__(self, master, text, **kwargs):
+        super().__init__(master, **kwargs)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+
+        # frame fundo (não deixa expandir)
+        frame = customtkinter.CTkFrame(self, fg_color="#333333", corner_radius=8)
+        frame.pack(padx=1, pady=1)  # sem expand
+
+        # texto
+        label = customtkinter.CTkLabel(
+            frame, text=text,
+            text_color="white",
+            anchor="w",
+            padx=10, pady=5
+        )
+        label.pack(side="left")
+
+        # botão X
+        close_btn = customtkinter.CTkButton(
+            frame, text="✕",
+            width=20, height=20,
+            fg_color="transparent",
+            hover_color="#555555",
+            text_color="white",
+            command=self._close
+        )
+        close_btn.pack(side="right", padx=5, pady=5)
+
+        # força janela no tamanho mínimo possível
+        self.update_idletasks()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()  # usa tamanho requerido
+        x = sw - w - 20
+        y = sh - h - 60 - sum(t.winfo_height() + 10 for t in Toast.active_toasts)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+        Toast.active_toasts.append(self)
+
+    def _close(self):
+        if self in Toast.active_toasts:
+            Toast.active_toasts.remove(self)
+        self.destroy()
+
 class EstoqueApp:
     def __init__(self, root):
         self.root = root
@@ -37,12 +85,19 @@ class EstoqueApp:
 
         # carrega configurações locais
         self.settings = utils.load_settings()
+        
+        # Importa MAC Address e checa tabela Sup
+        self.mac = utils.get_mac_address()
+        self.user = utils.get_or_create_user(utils.supabase, self.mac)
 
         # monta os componentes da interface
         self._build_filters()
         self._build_table()
         self._build_actions_stack()
 
+        if not self.user:
+            self.root.after(200, self._ask_name_non_modal)
+        
         # preenche a tabela logo após a janela criar (melhora sensação de inicialização)
         self.root.after(60, self.refresh_table)
         self.root.after(120, self.update_recent_list)
@@ -52,6 +107,7 @@ class EstoqueApp:
         self.root.bind("<Escape>", self._handle_escape)
         self._setup_tooltip_support()
         self._bind_search_suggestions()
+        utils.poll_notifications(self)
     
     def _handle_escape(self, event=None):
         current_page = [k for k, p in self.pages.items() if p.winfo_manager()]
@@ -73,13 +129,15 @@ class EstoqueApp:
     
     def warning_month_filter(self):
         if not self.settings.get("visualizar_todos_meses", False):
-            import locale 
+            import locale, threading  
             locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
-            messagebox.showinfo(
+            def show_warning():
+                messagebox.showinfo(
                 "Aviso",
                 f"Dados filtrados do mês de {datetime.now().strftime('%B').capitalize()}/{datetime.now().year}.\n"
                 "Para visualizar todos os meses, acesse as Configurações."
-            )
+                )
+            threading.Thread(target=show_warning).start()
         else:
             return
     
@@ -346,7 +404,7 @@ class EstoqueApp:
     def update_entry_width(self, *args):
         text = self.search_var.get()
         # largura base + multiplicador de caracteres
-        new_width = 50 + len(text) * 8
+        new_width = 75 + len(text) * 8
         self.search_entry.configure(width=min(new_width, 400) - 50)
     # ---------------- Table ----------------
     def _build_table(self):
@@ -631,7 +689,7 @@ class EstoqueApp:
         self.cnpj_var = customtkinter.StringVar(value="")
         self.combo_cnpj = customtkinter.CTkComboBox(
             parent, 
-            values=pad_values(["EH", "MVA"]), 
+            values=["EH", "MVA"], 
             variable=self.cnpj_var, 
             text_color="white", 
             justify="center", 
@@ -729,10 +787,20 @@ class EstoqueApp:
             "conferido_em": None
         }
 
+        notes = utils.load_notes()
+        nf_number = nf.strip()
+        
+        # verifica duplicata
+        if any(n.get("nf_number") == nf_number for n in notes):
+            messagebox.showwarning("Duplicado", f"A nota {nf_number} já existe!")
+            return
+
         # utils.save_note should append; if a note with same NF exists, utils module should handle update.
         utils.save_note(note)
         self.refresh_table()
         messagebox.showinfo("Sucesso", "Nota salva com sucesso.")
+        utils.update_note(c["id"], {"conferido": True, "modified_by": self.user["name"]})
+        Toast(self.root, f"Nota {nf['nf_number']} adicionada por {nf.get('modified_by', 'Desconhecido')}")
         self.show_page("home")
 
     def action_close_form(self):
@@ -981,6 +1049,16 @@ class EstoqueApp:
         n = self._get_note_by_iid(iid)
         if not n:
             return
+        
+        if n.get("conferido", False):
+            if messagebox.askyesno("Desmarcar", f"A nota {n['nf_number']} já está conferida.\nDeseja desmarcar?"):
+                utils.update_note(n["id"], {"conferido": False})
+                messagebox.showinfo("Sucesso", "Nota desmarcada como conferida.")
+                self.refresh_table()
+                return
+            else:
+                return
+                
         # dialog to choose conferente and date
         dialog = customtkinter.CTkToplevel(self.root)
         dialog.resizable(False, False)
@@ -996,8 +1074,8 @@ class EstoqueApp:
         date_var = customtkinter.StringVar(value=datetime.now().strftime("%d-%m-%Y"))
         date_entry = customtkinter.CTkEntry(dialog, textvariable=date_var, width=150, text_color="white", justify="center")
         date_entry.pack(pady=4)
-
-        def do_mark():
+        
+        def do_mark():    
             chosen = conf_var.get()
             d = date_var.get()
             try:
@@ -1022,6 +1100,7 @@ class EstoqueApp:
                 self.refresh_table()
                 dialog.destroy()
                 messagebox.showinfo("Sucesso", "Marcado como conferido.")
+                Toast(self.root, f"Nota {n['nf_number']} conferida!")
             else:
                 messagebox.showerror("Erro", "Nota não encontrada.")
 
@@ -1131,6 +1210,35 @@ class EstoqueApp:
         self._populate_table(notes)
 
     # ---------------- Helpers ----------------
+    
+    def _ask_name_non_modal(self):
+        """Abre uma janelinha não-modal para perguntar o nome do usuário"""
+        top = customtkinter.CTkToplevel(self.root)
+        top.title("Identificação")
+        top.geometry(self.center_geometry(200, 300))
+        top.geometry("300x150")
+        top.grab_set()  # opcional → mantém foco na janelinha, mas sem bloquear o mainloop
+
+        label = customtkinter.CTkLabel(top, text="Digite seu nome:")
+        label.pack(pady=(20, 10))
+
+        entry = customtkinter.CTkEntry(top, width=220, text_color="white", justify="center")
+        entry.pack(pady=5)
+
+        def salvar():
+            name = entry.get().strip() or "Usuário"
+            resp = utils.supabase.table("users").insert({
+                "mac": self.mac,
+                "name": name
+            }).execute()
+            if resp.data:
+                self.user = resp.data[0]
+            top.destroy()
+
+        btn = customtkinter.CTkButton(top, text="Salvar", command=salvar)
+        btn.pack(pady=15)
+
+        entry.focus()
     
     def show_add_form(self):
         # refresh supplier/conferente values before show
@@ -1353,8 +1461,6 @@ class EstoqueApp:
     def _hide_suggestions(self):
         if hasattr(self, "suggestion_win") and self.suggestion_win.winfo_exists():
             self.suggestion_win.destroy()
-
-import time
 
 if __name__ == "__main__":
     from utils_estoque import check_for_updates

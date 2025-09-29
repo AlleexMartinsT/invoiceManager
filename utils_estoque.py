@@ -4,6 +4,24 @@ import sys
 import json
 from datetime import datetime
 from supabase import create_client
+import uuid
+from typing import Optional
+
+import uuid
+
+def get_mac_address():
+    mac = uuid.getnode()
+    return ':'.join(("%012X" % mac)[i:i+2] for i in range(0, 12, 2)).lower()
+
+def get_or_create_user(supabase, mac_address):
+    """
+    Só verifica se já existe no Supabase.
+    Se não existir, retorna None — a UI (tk_estoque) abre a janela para pedir o nome.
+    """
+    resp = supabase.table("users").select("*").eq("mac", mac_address).execute()
+    if resp.data:
+        return resp.data[0]
+    return None
 
 # ---------------- Fornecedores ----------------
 def load_suppliers():
@@ -71,6 +89,42 @@ def resource_path(relative_path: str):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+def poll_notifications(app, last_seen_ids=set(), first_run=[True]):
+    """Verifica periodicamente se há notas novas ou conferidas e mostra Toast."""
+    from tk_estoque import Toast
+
+    def check():
+        try:
+            notes = load_notes()
+            new_ids = {n["id"] for n in notes}
+
+            if first_run[0]:
+                # Primeira rodada → só registra IDs, não notifica
+                last_seen_ids.clear()
+                last_seen_ids.update(new_ids)
+                first_run[0] = False
+            else:
+                # Notas novas
+                added = new_ids - last_seen_ids.copy()
+                for n in notes:
+                    if n["id"] in added:
+                        if n.get("conferido", False):
+                            Toast(app.root, f"Nota {n['nf_number']} conferida!")
+                        else:
+                            Toast(app.root, f"Nota {n['nf_number']} adicionada!")
+
+                # Atualiza conjunto de IDs vistos
+                last_seen_ids.clear()
+                last_seen_ids.update(new_ids)
+
+        except Exception as e:
+            print("Erro ao checar notificações:", e)
+
+        # roda de novo em 5 segundos
+        app.root.after(5000, check)
+
+    check()
 
 config_path = resource_path(os.path.join("data", "credentials.json"))
 

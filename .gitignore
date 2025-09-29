@@ -1,6 +1,7 @@
 # Arquivos sensíveis
 credenciais.json
 mapping.json
+build.py
 *.ico
 
 # Build / distribuição
