@@ -1,6 +1,6 @@
 import customtkinter as ctk
 import utils_estoque as utils
-import osg
+import os
 from tkinter import ttk
 from system.ui_components import make_label
 
