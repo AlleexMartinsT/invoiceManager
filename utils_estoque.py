@@ -5,8 +5,6 @@ import json
 from datetime import datetime
 from supabase import create_client
 import uuid
-from typing import Optional
-
 import uuid
 
 def get_mac_address():
@@ -92,7 +90,7 @@ def resource_path(relative_path: str):
 
 def poll_notifications(app, last_seen_ids=set(), first_run=[True]):
     """Verifica periodicamente se há notas novas ou conferidas e mostra Toast."""
-    from tk_estoque import Toast
+    from system.ui_components import Toast
 
     def check():
         try:
@@ -186,7 +184,7 @@ def check_for_updates(root):
                                     f.write(chunk)
                             messagebox.showinfo("Atualizado",
                                 f"Nova versão baixada como '{new_file}'. ")
-                            from autodelete import fechar_e_excluir
+                            from system.autodelete import fechar_e_excluir
                             fechar_e_excluir()
                         except Exception as e:
                             messagebox.showerror("Erro no Download", f"Ocorreu um erro: {e}")
