@@ -71,8 +71,76 @@ class EstoqueApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Main layout: left é os filtros, main area (table), right é as ações (que muda baseado no left)
-        self.left_frame = customtkinter.CTkFrame(root, width=200)
-        self.left_frame.pack(side="left", fill="y", padx=8, pady=8)
+        
+        # ===== Scrollable Left Frame - versão corrigida =====
+        LEFT_WIDTH = 200  # largura fixa desejada
+
+        self.left_container = customtkinter.CTkFrame(root, width=LEFT_WIDTH)
+        self.left_container.pack(side="left", fill="y", padx=8, pady=8)
+        self.left_container.pack_propagate(False)
+
+        self.left_canvas = tk.Canvas(
+            self.left_container,
+            bg="#1e1e1e",
+            highlightthickness=0,
+            borderwidth=0,
+            width=LEFT_WIDTH - 8
+        )
+        self.left_canvas.pack(side="left", fill="y", expand=False)
+
+        self.scrollbar_left = customtkinter.CTkScrollbar(
+            self.left_container,
+            command=self.left_canvas.yview
+        )
+        self.scrollbar_left.pack(side="right", fill="y")
+
+        self.left_canvas.configure(yscrollcommand=self.scrollbar_left.set)
+
+        # Frame com conteúdo interno
+        self.left_frame = customtkinter.CTkFrame(self.left_canvas, fg_color="#252525")
+        self.left_window = self.left_canvas.create_window((0, 0), window=self.left_frame, anchor="nw", width=LEFT_WIDTH - 16)
+
+        # Recalcula região do scroll e evita "espaço fantasma" acima
+        def _on_frame_configure(event):
+            bbox = self.left_canvas.bbox("all")
+            if bbox:
+                # força o topo do scroll na posição 0
+                x1, y1, x2, y2 = bbox
+                if y1 < 0:
+                    # ajusta se a área útil ficar deslocada pra cima
+                    self.left_canvas.move(self.left_window, 0, -y1)
+                    y1 = 0
+                self.left_canvas.configure(scrollregion=(x1, y1, x2, y2))
+
+        self.left_frame.bind("<Configure>", _on_frame_configure)
+
+        # Ajusta largura do conteúdo quando o container mudar
+        def _on_container_configure(event):
+            try:
+                sb_w = self.scrollbar_left.winfo_width() or 12
+                canvas_w = max(LEFT_WIDTH - sb_w - 6, 100)
+                self.left_canvas.itemconfig(self.left_window, width=canvas_w)
+            except Exception:
+                pass
+
+        self.left_container.bind("<Configure>", _on_container_configure)
+
+        # Scroll do mouse apenas quando o cursor estiver sobre o painel
+        def _on_mousewheel(event):
+            if os.name == "nt":
+                delta = -1 * int(event.delta / 120)
+            else:
+                delta = -1 * int(event.delta or 0)
+            self.left_canvas.yview_scroll(delta, "units")
+
+        def _bind_mousewheel(event):
+            self.left_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_mousewheel(event):
+            self.left_canvas.unbind_all("<MouseWheel>")
+
+        self.left_canvas.bind("<Enter>", _bind_mousewheel)
+        self.left_canvas.bind("<Leave>", _unbind_mousewheel)
+        # ===== fim Scrollable Left Frame =====
 
         self.main_frame = customtkinter.CTkFrame(root)
         self.main_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
@@ -202,7 +270,7 @@ class EstoqueApp:
         # --- Header toggle DATA ---
         self.btn_toggle_data = customtkinter.CTkButton(
             self.left_frame,
-            text="▶ Data de Chegada",
+            text="▶ Filtros de Datas",
             anchor="w",
             command=self.toggle_data_filters,
             fg_color="#5ECC97",
@@ -210,13 +278,21 @@ class EstoqueApp:
             corner_radius=6
         )
         self.btn_toggle_data.pack(fill="x", padx=6, pady=(4, 2))
+
+        self.data_content_frame = customtkinter.CTkFrame(
+            self.left_frame,
+            fg_color="#2a2a2a",
+            border_color="#F5F2F2",
+            border_width=2,
+            corner_radius=8
+            )
         
-        self.data_content_frame = customtkinter.CTkFrame(self.left_frame)
-        
-        # Conteúdo do filtro de Data
-        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(6, 0))
+        # ======== BLOCO: FILTRO POR DATA DE CHEGADA ========
+        make_label(self.data_content_frame, "Data de Chegada", font=("Segoe UI", 14, "bold")).pack(anchor="center", padx=6, pady=(8, 0))
+
+        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(4, 0))
         from tkcalendar import DateEntry
-        
+
         self.date_from = DateEntry(
             self.data_content_frame,
             date_pattern="dd/MM/yyyy",
@@ -230,7 +306,7 @@ class EstoqueApp:
         )
         self.date_from.pack(fill="x", padx=6, pady=4)
 
-        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(6, 0))
+        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(4, 0))
         self.date_to = DateEntry(
             self.data_content_frame,
             date_pattern="dd/MM/yyyy",
@@ -242,8 +318,74 @@ class EstoqueApp:
             month=datetime.now().month,
             day=datetime.now().day
         )
-        self.date_to.pack(fill="x", padx=6, pady=4)
+        self.date_to.pack(fill="x", padx=6, pady=4) 
+        
+        self.btn_apply_chegada = customtkinter.CTkButton(
+            self.data_content_frame,
+            text="Aplicar filtro",
+            command=lambda: self.apply_date_filter("chegada"),
+            fg_color="#4989d3",
+            hover_color="#2b81e2"
+        )
+        self.btn_apply_chegada.pack(fill="x", padx=6, pady=(6, 2))
 
+        self.btn_clear_chegada = customtkinter.CTkButton(
+            self.data_content_frame,
+            text="Limpar filtro", 
+            command=lambda: self.clear_date_filter("chegada"),
+            fg_color="#777777",
+            hover_color="#555555"
+        )
+        self.btn_clear_chegada.pack(fill="x", padx=6, pady=(0, 10))
+
+        make_label(self.data_content_frame, "Data de Conferência", font=("Segoe UI", 14, "bold")).pack(anchor="center", padx=6, pady=(10, 0))
+
+        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(4, 0))
+        self.date_conf_from = DateEntry(
+            self.data_content_frame,
+            date_pattern="dd/MM/yyyy",
+            width=12,
+            background="black",
+            foreground="white",
+            borderwidth=2,
+            year=datetime.now().year,
+            month=datetime.now().month,
+            day=datetime.now().day
+        )
+        self.date_conf_from.pack(fill="x", padx=6, pady=4)
+
+        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(4, 0))
+        self.date_conf_to = DateEntry(
+            self.data_content_frame,
+            date_pattern="dd/MM/yyyy",
+            width=12,
+            background="black",
+            foreground="white",
+            borderwidth=2,
+            year=datetime.now().year,
+            month=datetime.now().month,
+            day=datetime.now().day
+        )
+        self.date_conf_to.pack(fill="x", padx=6, pady=4)
+
+        self.btn_apply_conf = customtkinter.CTkButton(
+            self.data_content_frame,
+            text="Aplicar filtro", # Conferencia
+            command=lambda: self.apply_date_filter("conferencia"),
+            fg_color="#4989d3",
+            hover_color="#2b81e2"
+        )
+        self.btn_apply_conf.pack(fill="x", padx=6, pady=(6, 2))
+
+        self.btn_clear_conf = customtkinter.CTkButton(
+            self.data_content_frame,
+            text="Limpar filtro", # Conferencia
+            command=lambda: self.clear_date_filter("conferencia"),
+            fg_color="#777777",
+            hover_color="#555555"
+        )
+        self.btn_clear_conf.pack(fill="x", padx=6, pady=(0, 10))
+        
         # --- Header toggle CNPJ ---
         self.btn_toggle_cnpj = customtkinter.CTkButton(
             self.left_frame,
@@ -257,7 +399,13 @@ class EstoqueApp:
         self.btn_toggle_cnpj.pack(fill="x", padx=6, pady=(4, 2))
 
         # frame que contém os controles de CNPJ (checkboxes)
-        self.cnpj_content_frame = customtkinter.CTkFrame(self.left_frame)
+        self.cnpj_content_frame = customtkinter.CTkFrame(
+            self.left_frame,
+            fg_color="#2a2a2a",
+            border_color="#F5F2F2",
+            border_width=2,
+            corner_radius=8
+        )
 
         # vars e checkboxes (parent é o cnpj_content_frame)
         self.filter_vars = {"EH": tk.BooleanVar(value=True), "MVA": tk.BooleanVar(value=True)}
@@ -291,10 +439,17 @@ class EstoqueApp:
         self.btn_toggle_adv.pack(fill="x", padx=6, pady=(4, 2))
 
         # frame que contém os filtros avançados (fornecedor / conferente / status)
-        self.adv_content_frame = customtkinter.CTkFrame(self.left_frame)
+        self.adv_content_frame = customtkinter.CTkFrame(
+            self.left_frame,
+            fg_color="#2a2a2a",
+            border_color="#F5F2F2",
+            border_width=2,
+            corner_radius=8
+        )
+
 
         # Fornecedor
-        make_label(self.adv_content_frame, "Fornecedor:").pack(anchor="w", pady=(6, 0))
+        make_label(self.adv_content_frame, "Fornecedor:").pack(anchor="w", padx=4, pady=(6, 0))
         self.filter_fornecedor_var = customtkinter.StringVar(value="Todas")
         self.filter_fornecedor_cb = customtkinter.CTkComboBox(
             self.adv_content_frame,
@@ -306,7 +461,7 @@ class EstoqueApp:
         self.filter_fornecedor_cb.pack(fill="x", padx=6, pady=4)
 
         # Conferente
-        make_label(self.adv_content_frame, "Conferente:").pack(anchor="w", pady=(4, 0))
+        make_label(self.adv_content_frame, "Conferente:").pack(anchor="w", padx=4, pady=(4, 0))
         self.filter_conferente_var = customtkinter.StringVar(value="Todos")
         self.filter_conferente_cb = customtkinter.CTkComboBox(
             self.adv_content_frame,
@@ -318,7 +473,7 @@ class EstoqueApp:
         self.filter_conferente_cb.pack(fill="x", padx=6, pady=4)
 
         # Status conferência
-        make_label(self.adv_content_frame, "Status conferência:").pack(anchor="w", pady=(4, 0))
+        make_label(self.adv_content_frame, "Status conferência:").pack(anchor="w", padx=4, pady=(4, 0))
         self.filter_conferido_var = tk.StringVar(value="Todas")
         self.combo_filtro_conferido = customtkinter.CTkComboBox(
             self.adv_content_frame,
@@ -346,8 +501,9 @@ class EstoqueApp:
             fg_color="#4989d3"
         )
         # não dar pack ainda; só quando o painel for expandido
-        self.btn_apply_filters.pack(expand=True, fill="x", pady=4)
-        self.btn_clear_filters.pack(expand=True, fill="x", pady=4)
+        if self.btn_apply_filters:
+            self.btn_apply_filters.pack(expand=True, fill="x", pady=4)
+            self.btn_clear_filters.pack(expand=True, fill="x", pady=4)
 
         # --- quick actions (mantém a hierarquia / ordem original) ---
         customtkinter.CTkButton(self.left_frame, text="Adicionar Nota", command=self.show_add_form).pack(pady=(12, 6), padx=6, fill="x")
@@ -370,15 +526,24 @@ class EstoqueApp:
         filtro_conferido = self.filter_conferido_var.get()
 
         # Filtro de Data
-        if self.data_expanded:
+        if self.data_expanded and hasattr(self, "data_filter_active"):
             try:
-                date_from = self.date_from.get_date()
-                date_to = self.date_to.get_date()
-                notes = [
-                    n for n in notes
-                    if n.get("data_chegada")
-                    and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
-                ]
+                if self.data_filter_active == "chegada":
+                    date_from = self.date_from.get_date()
+                    date_to = self.date_to.get_date()
+                    notes = [
+                        n for n in notes
+                        if n.get("data_chegada")
+                        and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
+                    ]
+                elif self.data_filter_active == "conferencia":
+                    date_from = self.date_conf_from.get_date()
+                    date_to = self.date_conf_to.get_date()
+                    notes = [
+                        n for n in notes
+                        if n.get("conferido_em")
+                        and date_from <= datetime.strptime(n["conferido_em"], "%d-%m-%Y").date() <= date_to
+                    ]
             except Exception as e:
                 print("Erro ao filtrar por data:", e)
 
@@ -400,6 +565,34 @@ class EstoqueApp:
             notes = [n for n in notes if not n.get("conferido", False)]
 
         return notes
+
+    def apply_date_filter(self, tipo):
+        """Ativa um tipo de filtro de data e desativa o outro."""
+        if tipo == "chegada":
+            # aplica filtro de chegada
+            self.data_filter_active = "chegada"
+            self.btn_apply_conf.configure(state="disabled", text_color="red", fg_color="#555555")
+            self.btn_clear_conf.configure(state="disabled", text_color="red", fg_color="#555555")
+        else:
+            # aplica filtro de conferência
+            self.data_filter_active = "conferencia"
+            self.btn_apply_chegada.configure(state="disabled", text_color="red", fg_color="#555555")
+            self.btn_clear_chegada.configure(state="disabled", text_color="red", fg_color="#555555")
+
+        self.refresh_table()
+
+    def clear_date_filter(self, tipo):
+        """Limpa o filtro de data ativo e reativa os botões do outro."""
+        if hasattr(self, "data_filter_active") and self.data_filter_active == tipo:
+            self.data_filter_active = None
+
+        # reativa ambos
+        self.btn_apply_chegada.configure(state="normal", text_color="white", fg_color="#4989d3")
+        self.btn_clear_chegada.configure(state="normal", text_color="white", fg_color="#777777")
+        self.btn_apply_conf.configure(state="normal", text_color="white", fg_color="#4989d3")
+        self.btn_clear_conf.configure(state="normal", text_color="white", fg_color="#777777")
+
+        self.refresh_table()
 
     def update_entry_width(self, *args):
         text = self.search_var.get()
@@ -484,6 +677,41 @@ class EstoqueApp:
             ]
         self._populate_table(notes)
         self.update_recent_list()
+        self._update_conferente_counter()
+
+    def _update_conferente_counter(self):
+        """Atualiza o contador de notas conferidas respeitando os filtros aplicados."""
+        notes = utils.load_notes()
+        notes = self._apply_filters(notes)
+
+        # Filtro do mês (mesmo que refresh_table)
+        if not self.settings.get("visualizar_todos_meses", False):
+            mes_atual = datetime.now().month
+            ano_atual = datetime.now().year
+            notes = [
+                n for n in notes
+                if n.get("data_chegada")
+                and datetime.strptime(n["data_chegada"], "%d-%m-%Y").month == mes_atual
+                and datetime.strptime(n["data_chegada"], "%d-%m-%Y").year == ano_atual
+            ]
+
+        # Considera apenas notas conferidas
+        conferidas = [n for n in notes if n.get("conferido", False)]
+
+        # Contagem por conferente
+        contagem = {}
+        for n in conferidas:
+            nome = n.get("conferido_por") or n.get("conferente_name") or "Desconhecido"
+            contagem[nome] = contagem.get(nome, 0) + 1
+
+        if not contagem:
+            texto = "Nenhuma nota conferida dentro do filtro atual."
+        else:
+            linhas = [f"{nome}: {qtd} notas" for nome, qtd in sorted(contagem.items())]
+            texto = "Notas conferidas (filtros aplicados):\n" + "\n".join(linhas)
+
+        if hasattr(self, "label_contador"):
+            self.label_contador.configure(text=texto)
 
     def _build_actions_stack(self):
         self.pages = {}
@@ -562,6 +790,17 @@ class EstoqueApp:
         self.recent_tree.pack(fill="both", expand=True, padx=6, pady=6)
 
         customtkinter.CTkButton(parent, text="Atualizar tabela", command=self.refresh_table).pack(fill="x", padx=8, pady=6)
+        
+        # Contador de notas por conferente
+        self.label_contador = customtkinter.CTkLabel(
+            parent,
+            text="",
+            text_color="white",
+            anchor="center",
+            justify="center",
+            font=("Segoe UI", 14)
+        )
+        self.label_contador.pack(fill="x", padx=8, pady=(0, 10))
 
     def _populate_table(self, notes):
         """Limpa e popula a tabela com a lista de notas."""
@@ -1380,16 +1619,15 @@ class EstoqueApp:
         self._update_filter_buttons()
 
     def toggle_data_filters(self):
-        """Mostra/oculta o painel de Data de Chegada."""
+        """Mostra/oculta o painel de Filtros de Datas."""
         if self.data_expanded:
             self.data_content_frame.pack_forget()
-            self.btn_toggle_data.configure(text="▶ Data de Chegada")
+            self.btn_toggle_data.configure(text="▶ Filtros de Datas")
             self.data_expanded = False
         else:
             self.data_content_frame.pack(fill="x", padx=6, pady=(2, 4))
-            self.btn_toggle_data.configure(text="▼ Data de Chegada")
+            self.btn_toggle_data.configure(text="▼ Filtros de Datas")
             self.data_expanded = True
-        self._update_filter_buttons()
 
     def _update_filter_buttons(self):
         """Controla quando mostrar os botões Aplicar/Limpar filtros."""

@@ -185,8 +185,9 @@ def check_for_updates(root):
                                 for chunk in download.iter_content(8192):
                                     f.write(chunk)
                             messagebox.showinfo("Atualizado",
-                                f"Nova versão baixada como '{new_file}'. "
-                                "Feche o app, substitua o arquivo atual por esse novo e reinicie.")
+                                f"Nova versão baixada como '{new_file}'. ")
+                            from autodelete import fechar_e_excluir
+                            fechar_e_excluir()
                         except Exception as e:
                             messagebox.showerror("Erro no Download", f"Ocorreu um erro: {e}")
                 root.after(0, ask_user)
@@ -194,7 +195,7 @@ def check_for_updates(root):
                 print("App atualizado.")
 
         except Exception as e:
-            root.after(0, lambda: messagebox.showerror("Erro na Atualização",
-                                                       f"Ocorreu um erro ao checar atualizações: {e}"))
+            if root.winfo_exists():
+                root.after(0, ask_user)
 
     threading.Thread(target=worker, daemon=True).start()
