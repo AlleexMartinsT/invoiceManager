@@ -5,7 +5,6 @@ import json
 from datetime import datetime
 from supabase import create_client
 import uuid
-import uuid
 
 def get_mac_address():
     mac = uuid.getnode()
@@ -13,8 +12,8 @@ def get_mac_address():
 
 def get_or_create_user(supabase, mac_address):
     """
-    Só verifica se já existe no Supabase.
-    Se não existir, retorna None — a UI (tk_estoque) abre a janela para pedir o nome.
+    So verifica se ja existe no Supabase.
+    Se nao existir, retorna None - a UI (tk_estoque) abre a janela para pedir o nome.
     """
     resp = supabase.table("users").select("*").eq("mac", mac_address).execute()
     if resp.data:
@@ -23,7 +22,7 @@ def get_or_create_user(supabase, mac_address):
 
 # ---------------- Fornecedores ----------------
 def load_suppliers():
-    resp = supabase.table("suppliers").select("*").order("name").execute() # Ordenando por nome
+    resp = supabase.table("suppliers").select("*").order("name").execute()  # Ordenando por nome
     return resp.data or []
 
 def add_supplier(name):
@@ -34,12 +33,27 @@ def add_supplier(name):
     return load_suppliers()
 
 def remove_supplier(supplier_id):
-    supabase.table("suppliers").delete().eq("id", supplier_id).execute()
-    return load_suppliers()
+    """Remove fornecedor, mas impede exclusao se houver notas vinculadas."""
+
+    url = SUPABASE_URL
+    key = SUPABASE_KEY
+    sb = create_client(url, key)
+
+    # Verifica se ha notas associadas
+    related = sb.table("notes").select("id, nf_number, fornecedor_id").eq("fornecedor_id", supplier_id).execute()
+
+    print("DEBUG - supplier_id:", supplier_id)
+    print("DEBUG - notas vinculadas:", related.data)
+
+    if related.data:
+        return {"error": "linked_notes", "notes": related.data}
+
+    sb.table("suppliers").delete().eq("id", supplier_id).execute()
+    return {"success": True}
 
 # ---------------- Conferentes ----------------
 def load_conferentes():
-    resp = supabase.table("conferentes").select("*").order("name").execute() # Ordenando por nome
+    resp = supabase.table("conferentes").select("*").order("name").execute()  # Ordenando por nome
     return resp.data or []
 
 def add_conferente(name):
@@ -50,12 +64,19 @@ def add_conferente(name):
     return load_conferentes()
 
 def remove_conferente(conferente_id):
+    # Verifica notas relacionadas
+    related = supabase.table("notes").select("id, nf_number").eq("conferente_id", conferente_id).execute()
+
+    if related.data:
+        return {"error": "linked_notes", "notes": related.data}
+
+    # Se nao tiver vinculos, pode apagar
     supabase.table("conferentes").delete().eq("id", conferente_id).execute()
-    return load_conferentes()
+    return {"success: True"}
 
 # ---------------- Notas ----------------
 def load_notes():
-    resp = supabase.table("notes").select("*").order("id").execute()
+    resp = supabase.table("notes").select("*").order("created_at").execute()
     return resp.data or []
 
 def save_note(note: dict):
@@ -71,9 +92,21 @@ def remove_note(note_id):
     return load_notes()
 
 def save_all_notes(notes: list[dict]):
-    supabase.table("notes").delete().neq("id", 0).execute()
-    if notes:
-        supabase.table("notes").insert(notes).execute()
+    current_notes = load_notes()
+    current_by_id = {n["id"]: n for n in current_notes if n.get("id")}
+    incoming_by_id = {n["id"]: n for n in notes if n.get("id")}
+
+    for note_id in current_by_id.keys() - incoming_by_id.keys():
+        supabase.table("notes").delete().eq("id", note_id).execute()
+
+    for note in notes:
+        payload = dict(note)
+        note_id = payload.pop("id", None)
+        if note_id and note_id in current_by_id:
+            supabase.table("notes").update(payload).eq("id", note_id).execute()
+        else:
+            supabase.table("notes").insert(note).execute()
+
     return load_notes()
 
 # ---------------- Helpers ----------------
@@ -88,47 +121,74 @@ def resource_path(relative_path: str):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-def poll_notifications(app, last_seen_ids=set(), first_run=[True]):
-    """Verifica periodicamente se há notas novas ou conferidas e mostra Toast."""
+def poll_notifications(app, state=[{"first_run": True, "signatures": {}}]):
+    """Verifica mudancas nas notas e atualiza a UI apenas quando necessario."""
+    from PySide6 import QtCore
     from system.ui_components import Toast
+
+    def note_signature(note):
+        return (
+            str(note.get("id") or ""),
+            str(note.get("nf_number") or ""),
+            str(note.get("fornecedor_name") or ""),
+            str(note.get("cnpj") or ""),
+            str(note.get("recebido_por") or note.get("conferente_name") or ""),
+            str(note.get("data_chegada") or ""),
+            bool(note.get("conferido", False)),
+            str(note.get("conferido_por") or ""),
+            str(note.get("conferido_em") or ""),
+        )
 
     def check():
         try:
             notes = load_notes()
-            new_ids = {n["id"] for n in notes}
+            current = {str(n.get("id")): note_signature(n) for n in notes if n.get("id")}
+            previous = state[0]["signatures"]
 
-            if first_run[0]:
-                # Primeira rodada → só registra IDs, não notifica
-                last_seen_ids.clear()
-                last_seen_ids.update(new_ids)
-                first_run[0] = False
-            else:
-                # Notas novas
-                added = new_ids - last_seen_ids.copy()
-                for n in notes:
-                    if n["id"] in added:
-                        if n.get("conferido", False):
-                            Toast(app.root, f"Nota {n['nf_number']} conferida!")
-                        else:
-                            Toast(app.root, f"Nota {n['nf_number']} adicionada!")
+            if state[0]["first_run"]:
+                state[0]["signatures"] = current
+                state[0]["first_run"] = False
+                return
 
-                # Atualiza conjunto de IDs vistos
-                last_seen_ids.clear()
-                last_seen_ids.update(new_ids)
+            added = current.keys() - previous.keys()
+            removed = previous.keys() - current.keys()
+            changed = {
+                note_id for note_id in current.keys() & previous.keys()
+                if current[note_id] != previous[note_id]
+            }
+
+            for n in notes:
+                note_id = str(n.get("id"))
+                if note_id in added:
+                    if n.get("conferido", False):
+                        Toast(app, f"Nota {n['nf_number']} conferida!")
+                    else:
+                        Toast(app, f"Nota {n['nf_number']} adicionada!")
+                elif note_id in changed:
+                    previous_sig = previous.get(note_id, ())
+                    was_conferido = bool(previous_sig[6]) if len(previous_sig) > 6 else False
+                    if not was_conferido and n.get("conferido", False):
+                        Toast(app, f"Nota {n['nf_number']} conferida!")
+
+            if (added or removed or changed) and hasattr(app, "refresh_table"):
+                QtCore.QTimer.singleShot(0, app.refresh_table)
+
+            state[0]["signatures"] = current
 
         except Exception as e:
-            print("Erro ao checar notificações:", e)
+            print("Erro ao checar notificacoes:", e)
 
-        # roda de novo em 5 segundos
-        app.root.after(5000, check)
-
+    timer = QtCore.QTimer(app)
+    timer.setInterval(5000)
+    timer.timeout.connect(check)
+    timer.start()
     check()
 
 config_path = resource_path(os.path.join("data", "credentials.json"))
 
 with open(config_path, "r", encoding="utf-8") as f:
     config = json.load(f)
-    
+
 SUPABASE_URL = config.get("SUPABASE_URL")
 SUPABASE_KEY = config.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -153,47 +213,209 @@ def save_settings(settings: dict):
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 # ---------------- Update Checker ----------------
-    
+
 def check_for_updates(root):
     import requests
-    from tkinter import messagebox
     import threading
+    import zipfile
+    import shutil
+    import subprocess
+    import re
+    from PySide6 import QtCore, QtWidgets
     from versionfile_generator import APP_VERSION
-    
+
     GITHUB_REPO = "AlleexMartinsT/invoiceManager"
-    
-    def worker():
+    APP_DIR_NAME = "RelatorioEstoque"
+    APP_EXE_NAMES = (
+        "Relatorio de Estoque.exe",
+        "Relatorio do Estoque.exe",
+        "RelatorioEstoque.exe",
+    )
+
+    class UiInvoker(QtCore.QObject):
+        run = QtCore.Signal(object)
+
+    invoker = UiInvoker(root)
+    invoker.run.connect(lambda callback: callback())
+    root._update_invoker = invoker
+
+    def run_on_ui(callback):
         try:
-            # Checa versão
-            response = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest", timeout=10)
+            invoker.run.emit(callback)
+        except RuntimeError:
+            pass
+
+    def version_key(raw: str):
+        text = (raw or "").strip().lstrip("vV")
+        nums = [int(part) for part in re.findall(r"\d+", text)]
+        while len(nums) < 4:
+            nums.append(0)
+        return tuple(nums[:4])
+
+    def resolve_latest_release():
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "RelatorioEstoque-Updater",
+        }
+        timeout = 20
+
+        try:
+            response = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                headers=headers,
+                timeout=timeout,
+            )
             response.raise_for_status()
             data = response.json()
-            latest_version = data["tag_name"].lstrip("v")
+            if data and data.get("tag_name"):
+                return data
+        except Exception:
+            pass
 
-            if latest_version > APP_VERSION:
-                # Mostra diálogo na thread principal usando after()
+        try:
+            response = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases",
+                headers=headers,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            releases = response.json() or []
+            candidates = [
+                release
+                for release in releases
+                if not release.get("draft")
+                and not release.get("prerelease")
+                and release.get("tag_name")
+            ]
+            if not candidates:
+                return None
+            candidates.sort(key=lambda release: version_key(release.get("tag_name", "")), reverse=True)
+            return candidates[0]
+        except Exception:
+            return None
+
+    def choose_release_asset(assets):
+        if not assets:
+            return None
+
+        for suffix in (".zip", ".exe"):
+            for asset in assets:
+                name = str(asset.get("name", "")).lower()
+                if name.endswith(suffix) and asset.get("browser_download_url"):
+                    return asset
+        return None
+
+    def app_update_dir(version):
+        base_dir = os.path.join(os.getenv("LOCALAPPDATA", "."), APP_DIR_NAME)
+        target_dir = os.path.join(base_dir, f"app-{version}")
+        os.makedirs(target_dir, exist_ok=True)
+        return base_dir, target_dir
+
+    def safe_extract_zip(zip_path, extract_dir):
+        target_root = os.path.abspath(extract_dir)
+        with zipfile.ZipFile(zip_path, "r") as zip_file:
+            for member in zip_file.infolist():
+                member_path = os.path.abspath(os.path.join(extract_dir, member.filename))
+                if not member_path.startswith(target_root + os.sep) and member_path != target_root:
+                    raise RuntimeError("Arquivo invalido no pacote de atualizacao.")
+            zip_file.extractall(extract_dir)
+
+    def find_executable(extract_dir):
+        expected = {name.lower() for name in APP_EXE_NAMES}
+        first_exe = None
+
+        for root_dir, _dirs, files in os.walk(extract_dir):
+            for filename in files:
+                if not filename.lower().endswith(".exe"):
+                    continue
+                exe_path = os.path.join(root_dir, filename)
+                if filename.lower() in expected:
+                    return exe_path
+                if first_exe is None:
+                    first_exe = exe_path
+
+        return first_exe
+
+    def download_asset(asset, latest_version):
+        base_dir, extract_dir = app_update_dir(latest_version)
+        asset_name = os.path.basename(asset.get("name") or "")
+        asset_url = asset["browser_download_url"]
+        is_zip = asset_name.lower().endswith(".zip")
+        download_path = os.path.join(base_dir, asset_name or f"RelatorioEstoque-{latest_version}.zip")
+
+        response = requests.get(asset_url, stream=True, timeout=60)
+        response.raise_for_status()
+        with open(download_path, "wb") as file:
+            for chunk in response.iter_content(1024 * 256):
+                if chunk:
+                    file.write(chunk)
+
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        os.makedirs(extract_dir, exist_ok=True)
+
+        if is_zip:
+            safe_extract_zip(download_path, extract_dir)
+            exe_path = find_executable(extract_dir)
+        else:
+            exe_name = asset_name if asset_name.lower().endswith(".exe") else APP_EXE_NAMES[0]
+            exe_path = os.path.join(extract_dir, exe_name)
+            shutil.copy2(download_path, exe_path)
+
+        if not exe_path or not os.path.exists(exe_path):
+            raise RuntimeError("Nao foi possivel localizar o executavel na atualizacao.")
+
+        return exe_path
+
+    def worker():
+        try:
+            data = resolve_latest_release()
+            if not data or not data.get("tag_name"):
+                return
+
+            latest_version = data["tag_name"].lstrip("vV")
+
+            if version_key(latest_version) > version_key(APP_VERSION):
                 def ask_user():
-                    if messagebox.askyesno("Atualização Disponível",
-                        f"Uma nova versão ({latest_version}) está disponível! Deseja baixar agora?"):
-                        asset_url = data["assets"][0]["browser_download_url"]
-                        new_file = f"Relatório de Clientes {latest_version}.exe"
+                    resp = QtWidgets.QMessageBox.question(
+                        root,
+                        "Atualizacao Disponivel",
+                        f"Uma nova versao ({latest_version}) esta disponivel. Deseja baixar e reiniciar agora?",
+                    )
+                    if resp == QtWidgets.QMessageBox.Yes:
+                        asset = choose_release_asset(data.get("assets", []))
+                        if not asset:
+                            QtWidgets.QMessageBox.critical(
+                                root,
+                                "Erro na Atualizacao",
+                                "Nenhum arquivo .zip ou .exe foi encontrado na release.",
+                            )
+                            return
+
                         try:
-                            download = requests.get(asset_url, stream=True, timeout=30)
-                            with open(new_file, "wb") as f:
-                                for chunk in download.iter_content(8192):
-                                    f.write(chunk)
-                            messagebox.showinfo("Atualizado",
-                                f"Nova versão baixada como '{new_file}'. ")
-                            from system.autodelete import fechar_e_excluir
-                            fechar_e_excluir()
+                            exe_path = download_asset(asset, latest_version)
+                            QtWidgets.QMessageBox.information(
+                                root,
+                                "Atualizado",
+                                "Nova versao baixada e extraida. O aplicativo sera reiniciado.",
+                            )
+                            subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+                            QtWidgets.QApplication.quit()
                         except Exception as e:
-                            messagebox.showerror("Erro no Download", f"Ocorreu um erro: {e}")
-                root.after(0, ask_user)
+                            QtWidgets.QMessageBox.critical(root, "Erro no Download", f"Ocorreu um erro: {e}")
+
+                run_on_ui(ask_user)
             else:
                 print("App atualizado.")
 
         except Exception as e:
-            if root.winfo_exists():
-                root.after(0, ask_user)
+            if root and root.isVisible():
+                run_on_ui(
+                    lambda: QtWidgets.QMessageBox.critical(
+                        root,
+                        "Erro na Atualizacao",
+                        f"Ocorreu um erro ao checar atualizacoes: {e}",
+                    )
+                )
 
     threading.Thread(target=worker, daemon=True).start()

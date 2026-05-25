@@ -1,4 +1,4 @@
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.1.0"
 
 def versionfile_generator():
     template = f"""
@@ -22,7 +22,7 @@ VSVersionInfo(
         StringStruct('FileDescription', 'Relatório do Estoque'),
         StringStruct('FileVersion', '{APP_VERSION}'),
         StringStruct('InternalName', 'RelatorioEstoque'),
-        StringStruct('LegalCopyright', '© 2025 MVA'),
+        StringStruct('LegalCopyright', '© 2026 MVA'),
         StringStruct('OriginalFilename', 'Relatório do Estoque.exe'),
         StringStruct('ProductName', 'Sistema de Relatórios'),
         StringStruct('ProductVersion', '{APP_VERSION}')])

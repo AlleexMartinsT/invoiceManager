@@ -1,6 +1,6 @@
-import customtkinter as ctk
-import tkinter as tk
 import os
+import sys
+from PySide6 import QtCore, QtGui, QtWidgets
 import utils_estoque as utils
 from system.filters_section import FiltersMixin
 from system.table_section import TableMixin
@@ -9,385 +9,776 @@ from system.suppliers_section import SuppliersMixin
 from system.conferentes_section import ConferentesMixin
 from system.settings_section import SettingsMixin
 from system.actions_stack import ActionsMixin
+from system.ui_components import (
+    GradientCanvas,
+    APP_FONT_FAMILY,
+    PALETTE,
+    animate_widget_entry,
+    apply_shadow,
+    install_messagebox_tweaks,
+    make_panel,
+    style_text_field,
+)
 
-ctk.set_default_color_theme(os.path.join(os.path.dirname(__file__), "data", "basedTheme.json")
-                                      if os.path.exists(os.path.join(os.path.dirname(__file__), "data", "basedTheme.json"))
-                                      else None)
-ctk.set_appearance_mode("dark")
+class EstoqueApp(
+    QtWidgets.QMainWindow,
+    FiltersMixin,
+    TableMixin,
+    FormsMixin,
+    SuppliersMixin,
+    ConferentesMixin,
+    SettingsMixin,
+    ActionsMixin,
+):
+    def __init__(self):
+        super().__init__()
+        self._install_app_font()
+        install_messagebox_tweaks()
+        self.root = self
+        self.setWindowTitle("Relatorio do Estoque")
+        self.resize(1450, 800)
+        icon_path = utils.resource_path("icone.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QtGui.QIcon(icon_path))
 
-class EstoqueApp(FiltersMixin, TableMixin, FormsMixin, SuppliersMixin, ConferentesMixin, SettingsMixin, ActionsMixin):
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Relatório do Estoque")
-        self.root.geometry(self.center_geometry(1450, 800))
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._build_layout()
+        self._apply_style()
+        self.setMinimumSize(1280, 760)
 
-        # Main layout: left é os filtros, main area (table), right é as ações (que muda baseado no left)
-        
-        # ===== Scrollable Left Frame - versão corrigida =====
-        LEFT_WIDTH = 200  # largura fixa desejada
-
-        self.left_container = ctk.CTkFrame(root, width=LEFT_WIDTH)
-        self.left_container.pack(side="left", fill="y", padx=8, pady=8)
-        self.left_container.pack_propagate(False)
-
-        self.left_canvas = tk.Canvas(
-            self.left_container,
-            bg="#1e1e1e",
-            highlightthickness=0,
-            borderwidth=0,
-            width=LEFT_WIDTH - 8
-        )
-        self.left_canvas.pack(side="left", fill="y", expand=False)
-
-        self.scrollbar_left = ctk.CTkScrollbar(
-            self.left_container,
-            command=self.left_canvas.yview
-        )
-        self.scrollbar_left.pack(side="right", fill="y")
-
-        self.left_canvas.configure(yscrollcommand=self.scrollbar_left.set)
-
-        # Frame com conteúdo interno
-        self.left_frame = ctk.CTkFrame(self.left_canvas, fg_color="#252525")
-        self.left_window = self.left_canvas.create_window((0, 0), window=self.left_frame, anchor="nw", width=LEFT_WIDTH - 16)
-
-        # Recalcula região do scroll e evita "espaço fantasma" acima
-        def _on_frame_configure(event):
-            bbox = self.left_canvas.bbox("all")
-            if bbox:
-                # força o topo do scroll na posição 0
-                x1, y1, x2, y2 = bbox
-                if y1 < 0:
-                    # ajusta se a área útil ficar deslocada pra cima
-                    self.left_canvas.move(self.left_window, 0, -y1)
-                    y1 = 0
-                self.left_canvas.configure(scrollregion=(x1, y1, x2, y2))
-
-        self.left_frame.bind("<Configure>", _on_frame_configure)
-
-        # Ajusta largura do conteúdo quando o container mudar
-        def _on_container_configure(event):
-            try:
-                sb_w = self.scrollbar_left.winfo_width() or 12
-                canvas_w = max(LEFT_WIDTH - sb_w - 6, 100)
-                self.left_canvas.itemconfig(self.left_window, width=canvas_w)
-            except Exception:
-                pass
-
-        self.left_container.bind("<Configure>", _on_container_configure)
-
-        # Scroll do mouse apenas quando o cursor estiver sobre o painel
-        def _on_mousewheel(event):
-            if os.name == "nt":
-                delta = -1 * int(event.delta / 120)
-            else:
-                delta = -1 * int(event.delta or 0)
-            self.left_canvas.yview_scroll(delta, "units")
-
-        def _bind_mousewheel(event):
-            self.left_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        def _unbind_mousewheel(event):
-            self.left_canvas.unbind_all("<MouseWheel>")
-
-        self.left_canvas.bind("<Enter>", _bind_mousewheel)
-        self.left_canvas.bind("<Leave>", _unbind_mousewheel)
-        # ===== fim Scrollable Left Frame =====
-
-        self.main_frame = ctk.CTkFrame(root)
-        self.main_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        
-        self.search_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.search_frame.pack(fill="x", padx=6, pady=(0, 6))
-
-        self.actions_frame = ctk.CTkFrame(root, width=300)
-        self.actions_frame.pack(side="right", fill="x", padx=8, pady=8)
-
-        # carrega configurações locais
         self.settings = utils.load_settings()
-        
-        # Importa MAC Address e checa tabela Sup
         self.mac = utils.get_mac_address()
         self.user = utils.get_or_create_user(utils.supabase, self.mac)
 
-        # monta os componentes da interface
         self._build_filters()
         self._build_table()
         self._build_actions_stack()
 
         if not self.user:
-            self.root.after(200, self._ask_name_non_modal)
-        
-        # preenche a tabela logo após a janela criar (melhora sensação de inicialização)
-        self.root.after(60, self.refresh_table)
-        self.root.after(120, self.update_recent_list)
-        self.root.after(120, self.warning_month_filter)
+            QtCore.QTimer.singleShot(200, self._ask_name_non_modal)
 
-        # Key bindings
-        self.root.bind("<Escape>", self._handle_escape)
+        QtCore.QTimer.singleShot(60, self.refresh_table)
+        QtCore.QTimer.singleShot(120, self.update_recent_list)
+        QtCore.QTimer.singleShot(120, self.warning_month_filter)
+
+        QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape), self).activated.connect(self._handle_escape)
         self._setup_tooltip_support()
         self._bind_search_suggestions()
         utils.poll_notifications(self)
-    
-    def _handle_escape(self, event=None):
-        current_page = [k for k, p in self.pages.items() if p.winfo_manager()]
-        if current_page and current_page[0] != "home":
-            if current_page[0] == "add_form":
-                self.action_close_form()
-            else:
-                self.show_page("home")
-        else:
-            self.show_page("home")   # nunca fecha, sempre volta pro menu principal
+
+    def _install_app_font(self):
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            return
+        app.setApplicationName("Relatorio do Estoque")
+        if hasattr(app, "setApplicationDisplayName"):
+            app.setApplicationDisplayName("Relatorio do Estoque")
+
+        font_path = utils.resource_path(os.path.join("assets", "fonts", "Lexend.ttf"))
+        if os.path.exists(font_path):
+            font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
+            families = QtGui.QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+            if families:
+                app.setFont(QtGui.QFont(families[0]))
+                return
+
+        app.setFont(QtGui.QFont(APP_FONT_FAMILY))
+
+    def _build_layout(self):
+        central = GradientCanvas(self)
+        central.setObjectName("appRoot")
+        self.setCentralWidget(central)
+        root_layout = QtWidgets.QHBoxLayout(central)
+        root_layout.setContentsMargins(24, 24, 24, 24)
+        root_layout.setSpacing(18)
+
+        self.left_container = make_panel(central, "sidebar")
+        self.left_container.setObjectName("sidebarPanel")
+        self.left_container.setFixedWidth(252)
+        left_container_layout = QtWidgets.QVBoxLayout(self.left_container)
+        left_container_layout.setContentsMargins(0, 0, 0, 0)
+        left_container_layout.setSpacing(0)
+
+        self.left_scroll = QtWidgets.QScrollArea(self.left_container)
+        self.left_scroll.setObjectName("sidebarScroll")
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.left_frame = QtWidgets.QFrame()
+        self.left_frame.setObjectName("leftFrame")
+        self.left_layout = QtWidgets.QVBoxLayout(self.left_frame)
+        self.left_layout.setContentsMargins(12, 12, 12, 12)
+        self.left_layout.setSpacing(10)
+        self.left_scroll.setWidget(self.left_frame)
+        left_container_layout.addWidget(self.left_scroll)
+        root_layout.addWidget(self.left_container)
+        apply_shadow(self.left_container, blur=38, y_offset=18, alpha=70)
+
+        self.main_frame = QtWidgets.QFrame(central)
+        self.main_frame.setObjectName("mainWorkspace")
+        self.main_layout = QtWidgets.QVBoxLayout(self.main_frame)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(16)
+
+        self.hero_frame = make_panel(self.main_frame, "heroTitle")
+        self.hero_frame.setObjectName("heroTitleCard")
+        self.hero_layout = QtWidgets.QVBoxLayout(self.hero_frame)
+        self.hero_layout.setContentsMargins(28, 22, 28, 22)
+        self.hero_layout.setSpacing(8)
+        self.main_layout.addWidget(self.hero_frame)
+        apply_shadow(self.hero_frame, blur=40, y_offset=16, alpha=58)
+
+        self.search_frame = make_panel(self.main_frame, "toolbar")
+        self.search_frame.setObjectName("toolbarCard")
+        self.search_layout = QtWidgets.QHBoxLayout(self.search_frame)
+        self.search_layout.setContentsMargins(18, 16, 18, 16)
+        self.search_layout.setSpacing(14)
+        self.main_layout.addWidget(self.search_frame)
+        root_layout.addWidget(self.main_frame, 1)
+        apply_shadow(self.search_frame, blur=34, y_offset=14, alpha=52)
+
+        self.actions_frame = make_panel(central, "actionRail")
+        self.actions_frame.setObjectName("actionRail")
+        self.actions_frame.setFixedWidth(412)
+        actions_frame_layout = QtWidgets.QVBoxLayout(self.actions_frame)
+        actions_frame_layout.setContentsMargins(0, 0, 0, 0)
+        actions_frame_layout.setSpacing(0)
+        self.actions_scroll = QtWidgets.QScrollArea(self.actions_frame)
+        self.actions_scroll.setObjectName("actionRailScroll")
+        self.actions_scroll.setWidgetResizable(True)
+        self.actions_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.actions_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.actions_body = QtWidgets.QFrame()
+        self.actions_body.setObjectName("actionsBody")
+        self.actions_layout = QtWidgets.QVBoxLayout(self.actions_body)
+        self.actions_layout.setContentsMargins(16, 16, 28, 16)
+        self.actions_layout.setSpacing(14)
+        self.actions_scroll.setWidget(self.actions_body)
+        actions_frame_layout.addWidget(self.actions_scroll)
+        root_layout.addWidget(self.actions_frame)
+        apply_shadow(self.actions_frame, blur=38, y_offset=18, alpha=70)
+
+    def _apply_style(self):
+        action_orange = "#D97706"
+        action_orange_hover = "#E08A1E"
+        action_pressed = "#0EA5E9"
+        self.setStyleSheet(
+            "QMainWindow { background: #07111F; color: #F8FAFC; }"
+            f"QWidget {{ font-family: '{APP_FONT_FAMILY}'; }}"
+            f"QWidget#appRoot {{ background: transparent; color: #F8FAFC; font-family: '{APP_FONT_FAMILY}'; font-size: 12px; }}"
+            "QFrame { background: transparent; color: #F8FAFC; }"
+            "QFrame[card=\"true\"] {"
+            "background: rgba(45, 55, 72, 214);"
+            "border: 1px solid rgba(255, 255, 255, 18);"
+            "border-radius: 24px;"
+            "}"
+            "QFrame[card=\"true\"][kind=\"metric\"] {"
+            "background: rgba(39, 48, 63, 224);"
+            "border-radius: 22px;"
+            "}"
+            "QFrame[card=\"true\"][kind=\"heroTitle\"] {"
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            "stop:0 rgba(249, 115, 22, 28),"
+            "stop:0.45 rgba(36, 45, 59, 238),"
+            "stop:1 rgba(56, 189, 248, 24));"
+            "border: 1px solid rgba(255, 255, 255, 30);"
+            "border-radius: 28px;"
+            "}"
+            "QFrame[card=\"true\"][kind=\"scopeHighlight\"] {"
+            "background: rgba(249, 115, 22, 0.12);"
+            "border: 1px solid rgba(251, 146, 60, 0.42);"
+            "border-radius: 18px;"
+            "}"
+            "QFrame#sidebarPanel, QFrame#actionRail {"
+            "background: rgba(11, 23, 40, 236);"
+            "border: 1px solid rgba(255, 255, 255, 22);"
+            "border-radius: 28px;"
+            "}"
+            "QFrame#toolbarCard {"
+            "background: rgba(11, 23, 40, 232);"
+            "border: 1px solid rgba(255, 255, 255, 22);"
+            "border-radius: 26px;"
+            "}"
+            "QFrame#leftFrame { background: transparent; border: none; }"
+            "QScrollArea#sidebarScroll { background: transparent; border: none; }"
+            "QScrollArea#sidebarScroll > QWidget > QWidget { background: transparent; }"
+            "QScrollArea#actionRailScroll { background: transparent; border: none; }"
+            "QScrollArea#actionRailScroll > QWidget > QWidget { background: transparent; }"
+            "QFrame#actionsBody { background: transparent; border: none; }"
+            "QLabel { color: #F8FAFC; background: transparent; }"
+            "QLabel[muted=\"true\"] { color: #94A3B8; }"
+            "QLabel[eyebrow=\"true\"] { color: #94A3B8; font-size: 10px; font-weight: 700; letter-spacing: 1px; }"
+            "QLabel[hero=\"true\"] { color: #F8FAFC; font-size: 24px; font-weight: 700; }"
+            "QLabel[metricValue=\"true\"] { color: #F8FAFC; font-size: 30px; font-weight: 700; }"
+            "QLabel[appTitle=\"true\"] { color: #FFF7ED; font-size: 30px; font-weight: 800; letter-spacing: 0.3px; }"
+            "QLabel[appLead=\"true\"] { color: #CBD5E1; font-size: 13px; font-weight: 500; }"
+            "QLabel[scopeHeadline=\"true\"] { color: #FFF7ED; font-size: 13px; font-weight: 700; }"
+            "QLabel[scopeSupport=\"true\"] { color: #FED7AA; font-size: 11px; font-weight: 600; }"
+            "QLabel[filterHeader=\"true\"] {"
+            "color: #F8FAFC;"
+            "font-size: 15px;"
+            "font-weight: 800;"
+            "letter-spacing: 0.4px;"
+            "}"
+            "QLabel[filterSectionLabel=\"true\"] {"
+            "color: #FFF7ED;"
+            "font-size: 12px;"
+            "font-weight: 900;"
+            "letter-spacing: 0.2px;"
+            "padding: 4px 0px 2px 0px;"
+            "}"
+            "QLabel[filterFieldLabel=\"true\"] {"
+            "color: #B6C2D2;"
+            "font-size: 13px;"
+            "font-weight: 800;"
+            "}"
+            "QLabel[filterComboLabel=\"true\"] {"
+            "color: #B6C2D2;"
+            "font-size: 12px;"
+            "font-weight: 800;"
+            "letter-spacing: 0.15px;"
+            "padding-left: 4px;"
+            "}"
+            "QFrame[summaryStat=\"true\"] {"
+            "background: rgba(8, 18, 32, 150);"
+            "border: 1px solid rgba(125, 211, 252, 0.16);"
+            "border-radius: 18px;"
+            "}"
+            "QLabel[summaryLabel=\"true\"] {"
+            "color: #94A3B8;"
+            "font-size: 10px;"
+            "font-weight: 800;"
+            "letter-spacing: 0.8px;"
+            "}"
+            "QLabel[summaryValue=\"true\"] {"
+            "color: #F8FAFC;"
+            "font-size: 16px;"
+            "font-weight: 800;"
+            "}"
+            "QLineEdit, QComboBox, QTextEdit, QDateEdit, QTableWidget {"
+            "background: rgba(8, 18, 32, 208);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 20);"
+            "border-radius: 18px;"
+            "padding: 10px 12px;"
+            "min-height: 24px;"
+            "selection-background-color: rgba(56, 189, 248, 70);"
+            "}"
+            "QLineEdit[formField=\"true\"], QComboBox[formField=\"true\"], QDateEdit[formField=\"true\"] {"
+            "min-height: 34px;"
+            "padding: 11px 14px;"
+            "border-radius: 20px;"
+            "}"
+            "QLineEdit[compactFormField=\"true\"], QComboBox[compactFormField=\"true\"], QDateEdit[compactFormField=\"true\"] {"
+            "min-height: 30px;"
+            "padding: 7px 11px;"
+            "border-radius: 16px;"
+            "}"
+            "QTextEdit { padding-top: 12px; }"
+            "QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QDateEdit:focus {"
+            f"border: 1px solid {PALETTE['blue']};"
+            "}"
+            "QComboBox::drop-down { border: none; width: 22px; }"
+            "QComboBox::down-arrow { image: none; width: 8px; height: 8px; }"
+            "QComboBox[supplierField=\"true\"] { font-size: 10px; }"
+            "QComboBox[compactFormField=\"true\"]::drop-down { border: none; width: 16px; }"
+            "QComboBox[compactFormField=\"true\"]::down-arrow { image: none; width: 7px; height: 7px; }"
+            "QComboBox QLineEdit {"
+            "background: transparent;"
+            "border: none;"
+            "padding: 0px;"
+            "color: #F8FAFC;"
+            "selection-background-color: rgba(56, 189, 248, 70);"
+            "}"
+            "QComboBox QAbstractItemView {"
+            "background: rgba(8, 18, 32, 244);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 20);"
+            "border-radius: 16px;"
+            "padding: 6px;"
+            "selection-background-color: rgba(56, 189, 248, 70);"
+            "selection-color: #F8FAFC;"
+            "outline: 0;"
+            "}"
+            "QComboBox QAbstractItemView::item {"
+            "min-height: 34px;"
+            "padding: 6px 10px;"
+            "}"
+            "QDateEdit[dateField=\"true\"] {"
+            "font-weight: 600;"
+            "padding-right: 28px;"
+            "border-radius: 16px;"
+            "}"
+            "QDateEdit[filterDateField=\"true\"] {"
+            "font-size: 13px;"
+            "font-weight: 700;"
+            "padding: 8px 10px;"
+            "padding-right: 10px;"
+            "}"
+            "QDateEdit[dateField=\"true\"]::drop-down {"
+            "subcontrol-origin: padding;"
+            "subcontrol-position: top right;"
+            "width: 28px;"
+            "border: none;"
+            "}"
+            "QDateEdit[dateField=\"true\"]::down-arrow {"
+            "width: 8px;"
+            "height: 8px;"
+            "}"
+            "QDateEdit[dateField=\"true\"][compactFormField=\"true\"] {"
+            "padding-right: 14px;"
+            "}"
+            "QDateEdit[dateField=\"true\"][compactFormField=\"true\"]::drop-down {"
+            "width: 12px;"
+            "border-left: 1px solid rgba(56, 189, 248, 0.18);"
+            "background: rgba(56, 189, 248, 0.10);"
+            "}"
+            "QDateEdit[dateField=\"true\"][compactFormField=\"true\"]::up-button, "
+            "QDateEdit[dateField=\"true\"][compactFormField=\"true\"]::down-button {"
+            "width: 12px;"
+            "border-left: 1px solid rgba(56, 189, 248, 0.18);"
+            "background: rgba(56, 189, 248, 0.10);"
+            "}"
+            "QDateEdit[dateField=\"true\"][compactFormField=\"true\"]::down-arrow {"
+            "width: 6px;"
+            "height: 6px;"
+            "}"
+            "QCalendarWidget QWidget {"
+            "background: rgba(11, 23, 40, 246);"
+            "color: #F8FAFC;"
+            "}"
+            "QCalendarWidget QToolButton {"
+            "background: rgba(255, 255, 255, 0.06);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 12);"
+            "border-radius: 12px;"
+            "padding: 6px 10px;"
+            "}"
+            "QCalendarWidget QSpinBox {"
+            "background: rgba(8, 18, 32, 208);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 16);"
+            "border-radius: 12px;"
+            "padding: 4px 8px;"
+            "}"
+            "QCalendarWidget QAbstractItemView {"
+            "selection-background-color: rgba(56, 189, 248, 0.32);"
+            "selection-color: #F8FAFC;"
+            "background: rgba(11, 23, 40, 246);"
+            "border: none;"
+            "outline: 0;"
+            "}"
+            "QPushButton {"
+            "background: rgba(255, 255, 255, 0.08);"
+            "color: #E2E8F0;"
+            "border: 1px solid rgba(255, 255, 255, 14);"
+            "border-radius: 16px;"
+            "padding: 10px 14px;"
+            "font-weight: 600;"
+            "}"
+            "QPushButton:hover { background: rgba(255, 255, 255, 0.14); }"
+            "QPushButton:pressed, QPushButton[pressedFeedback=\"true\"] {"
+            "background: rgba(14, 165, 233, 0.28);"
+            "border: 1px solid rgba(125, 211, 252, 0.72);"
+            "color: #F8FAFC;"
+            "}"
+            "QPushButton[accent=\"true\"] {"
+            f"background: {action_orange};"
+            "color: #FFF7ED;"
+            "border: none;"
+            "font-weight: 700;"
+            "}"
+            f"QPushButton[accent=\"true\"]:hover {{ background: {action_orange_hover}; }}"
+            "QPushButton[accent=\"true\"]:pressed, QPushButton[accent=\"true\"][pressedFeedback=\"true\"] {"
+            f"background: {action_pressed};"
+            "color: #F8FAFC;"
+            "border: none;"
+            "}"
+            "QPushButton[quiet=\"true\"] {"
+            "background: rgba(11, 23, 40, 0.72);"
+            "color: #D7E0EE;"
+            "border: 1px solid rgba(255, 255, 255, 16);"
+            "}"
+            "QPushButton[quiet=\"true\"]:hover { background: rgba(255, 255, 255, 0.10); }"
+            "QPushButton[quiet=\"true\"]:pressed, QPushButton[quiet=\"true\"][pressedFeedback=\"true\"] {"
+            "background: rgba(14, 165, 233, 0.18);"
+            "border: 1px solid rgba(125, 211, 252, 0.56);"
+            "color: #F8FAFC;"
+            "}"
+            "QPushButton[nav=\"true\"] {"
+            "text-align: left;"
+            "padding: 12px 14px;"
+            "font-size: 12px;"
+            "}"
+            "QPushButton[filterToggleButton=\"true\"] {"
+            "font-family: 'Segoe UI';"
+            "font-size: 12px;"
+            "font-weight: 700;"
+            "letter-spacing: 0.2px;"
+            "}"
+            "QToolButton {"
+            "background: rgba(11, 23, 40, 0.72);"
+            "border: 1px solid rgba(255, 255, 255, 16);"
+            "border-radius: 16px;"
+            "padding: 10px;"
+            "}"
+            "QToolButton:hover { background: rgba(255, 255, 255, 0.10); }"
+            "QToolButton[filterToggleButton=\"true\"] {"
+            "background: rgba(255, 255, 255, 0.08);"
+            "color: #E2E8F0;"
+            "border: 1px solid rgba(255, 255, 255, 14);"
+            "border-radius: 16px;"
+            "padding: 11px 14px;"
+            "font-family: 'Segoe UI';"
+            "font-size: 12px;"
+            "font-weight: 700;"
+            "text-align: left;"
+            "}"
+            "QToolButton[filterToggleButton=\"true\"]:hover {"
+            "background: rgba(255, 255, 255, 0.14);"
+            "}"
+            "QToolButton[filterToggleButton=\"true\"]:pressed, "
+            "QToolButton[filterToggleButton=\"true\"][pressedFeedback=\"true\"] {"
+            "background: rgba(14, 165, 233, 0.28);"
+            "border: 1px solid rgba(125, 211, 252, 0.72);"
+            "color: #F8FAFC;"
+            "}"
+            "QToolButton#searchIconButton {"
+            "background: rgba(217, 119, 6, 0.18);"
+            "border: 1px solid rgba(245, 158, 11, 0.58);"
+            "border-radius: 18px;"
+            "padding: 8px;"
+            "}"
+            "QToolButton#searchIconButton:hover { background: rgba(217, 119, 6, 0.26); }"
+            "QToolButton#searchIconButton:pressed {"
+            "background: rgba(14, 165, 233, 0.26);"
+            "border: 1px solid rgba(125, 211, 252, 0.72);"
+            "}"
+            "QPushButton#searchToggleButton {"
+            "background: rgba(217, 119, 6, 0.16);"
+            "border: 1px solid rgba(245, 158, 11, 0.56);"
+            "color: #FFF7ED;"
+            "border-radius: 18px;"
+            "padding: 12px 18px;"
+            "font-size: 13px;"
+            "font-weight: 700;"
+            "}"
+            "QPushButton#searchToggleButton:hover { background: rgba(217, 119, 6, 0.24); }"
+            "QPushButton#searchToggleButton:pressed, QPushButton#searchToggleButton[pressedFeedback=\"true\"] {"
+            "background: rgba(14, 165, 233, 0.28);"
+            "border: 1px solid rgba(125, 211, 252, 0.74);"
+            "color: #F8FAFC;"
+            "}"
+            "QPushButton#searchModeButton {"
+            "background: rgba(255, 255, 255, 0.05);"
+            "border: 1px solid rgba(255, 255, 255, 0.14);"
+            "color: #D7E0EE;"
+            "border-radius: 14px;"
+            "padding: 8px 12px;"
+            "font-size: 12px;"
+            "font-weight: 700;"
+            "}"
+            "QPushButton#searchModeButton:checked {"
+            "background: rgba(56, 189, 248, 0.20);"
+            "border: 1px solid rgba(56, 189, 248, 0.78);"
+            "color: #F8FAFC;"
+            "}"
+            "QPushButton#searchModeButton:pressed, QPushButton#searchModeButton[pressedFeedback=\"true\"] {"
+            "background: rgba(14, 165, 233, 0.24);"
+            "border: 1px solid rgba(125, 211, 252, 0.70);"
+            "color: #F8FAFC;"
+            "}"
+            "QCheckBox { color: #D7E0EE; spacing: 8px; }"
+            "QCheckBox::indicator {"
+            "width: 18px; height: 18px;"
+            "border-radius: 6px;"
+            "border: 1px solid rgba(255, 255, 255, 24);"
+            "background: rgba(8, 18, 32, 208);"
+            "}"
+            "QCheckBox::indicator:checked {"
+            f"background: {action_orange};"
+            "border: none;"
+            "}"
+            "QHeaderView::section {"
+            "background: transparent;"
+            "color: #94A3B8;"
+            "padding: 12px 10px;"
+            "border: none;"
+            "font-size: 11px;"
+            "font-weight: 700;"
+            "}"
+            "QTableWidget {"
+            "alternate-background-color: rgba(255, 255, 255, 0.02);"
+            "gridline-color: rgba(255, 255, 255, 0.04);"
+            "show-decoration-selected: 1;"
+            "}"
+            "QTableWidget::item {"
+            "padding: 8px;"
+            "border-bottom: 1px solid rgba(255, 255, 255, 0.04);"
+            "}"
+            "QListWidget {"
+            "background: rgba(8, 18, 32, 208);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 20);"
+            "border-radius: 18px;"
+            "padding: 8px;"
+            "outline: 0;"
+            "alternate-background-color: rgba(255, 255, 255, 0.025);"
+            "}"
+            "QListWidget::item {"
+            "min-height: 34px;"
+            "padding: 8px 12px;"
+            "border-radius: 12px;"
+            "border-bottom: 1px solid rgba(255, 255, 255, 0.04);"
+            "}"
+            "QListWidget::item:selected {"
+            "background: rgba(56, 189, 248, 0.18);"
+            "color: #F8FAFC;"
+            "}"
+            "QScrollBar:vertical {"
+            "background: transparent;"
+            "width: 8px;"
+            "margin: 2px 2px 2px 0px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "background: rgba(148, 163, 184, 0.34);"
+            "border-radius: 4px;"
+            "min-height: 28px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: rgba(148, 163, 184, 0.48); }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, "
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+            "height: 0px; background: transparent;"
+            "}"
+            "QMenu {"
+            "background: rgba(11, 23, 40, 242);"
+            "border: 1px solid rgba(255, 255, 255, 22);"
+            "border-radius: 16px;"
+            "padding: 8px;"
+            "}"
+            "QMenu::item { padding: 10px 14px; border-radius: 10px; }"
+            "QMenu::item:selected { background: rgba(56, 189, 248, 0.16); }"
+            "QDialog {"
+            "background: rgba(11, 23, 40, 246);"
+            "color: #F8FAFC;"
+            "}"
+            "QToolTip {"
+            "background: rgba(11, 23, 40, 242);"
+            "color: #F8FAFC;"
+            "border: 1px solid rgba(255, 255, 255, 22);"
+            "padding: 6px 8px;"
+            "border-radius: 10px;"
+            "}"
+        )
+
+    def _handle_escape(self):
+        if hasattr(self, "_add_form_dialog") and self._add_form_dialog and self._add_form_dialog.isVisible():
+            self.action_close_form()
+            return
+        self.show_page("home")
 
     def center_geometry(self, w, h):
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        x = (sw - w) // 2
-        y = (sh - h) // 2
-        return f"{w}x{h}+{x}+{y}"
+        screen = QtGui.QGuiApplication.primaryScreen().availableGeometry()
+        x = (screen.width() - w) // 2
+        y = (screen.height() - h) // 2
+        return QtCore.QRect(x, y, w, h)
 
-            # ---------------- Filters ----------------
-     
-    def update_entry_width(self, *args):
-        text = self.search_var.get()
-        # largura base + multiplicador de caracteres
-        new_width = 75 + len(text) * 8
-        self.search_entry.configure(width=min(new_width, 400) - 50)
-    
-    # ---------------- Add form ----------------
+    def _prepare_dialog(self, dialog, modal=True):
+        dialog.setWindowIcon(self.windowIcon())
+        dialog.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
+        dialog.adjustSize()
+        dialog.setGeometry(self.center_geometry(dialog.width(), dialog.height()))
+        if isinstance(dialog, QtWidgets.QDialog):
+            dialog.setModal(modal)
+        dialog.setWindowModality(
+            QtCore.Qt.ApplicationModal if modal else QtCore.Qt.NonModal
+        )
+
+    def _show_blocking_dialog(self, dialog, y_offset=18):
+        self._prepare_dialog(dialog, modal=True)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        QtCore.QTimer.singleShot(0, lambda d=dialog, offset=y_offset: animate_widget_entry(d, y_offset=offset))
+
+    def _exec_modal_dialog(self, dialog, y_offset=18):
+        self._prepare_dialog(dialog, modal=True)
+        QtCore.QTimer.singleShot(0, lambda d=dialog, offset=y_offset: animate_widget_entry(d, y_offset=offset))
+        return dialog.exec()
+
+    def update_entry_width(self, *_):
+        if hasattr(self, "search_entry"):
+            self.search_entry.setFixedWidth(220)
+
+    def _current_search_mode(self):
+        if hasattr(self, "search_mode_supplier") and self.search_mode_supplier.isChecked():
+            return "Fornecedor"
+        return "NF"
 
     def _supplier_names(self):
+        if hasattr(self, "_supplier_names_cache"):
+            return list(self._supplier_names_cache)
         suppliers = utils.load_suppliers()
-        return [s["name"] for s in suppliers]
+        self._supplier_names_cache = [s["name"] for s in suppliers]
+        return list(self._supplier_names_cache)
 
     def _conferente_names(self):
+        if hasattr(self, "_conferente_names_cache"):
+            return list(self._conferente_names_cache)
         conferentes = utils.load_conferentes()
-        return [c["name"] for c in conferentes]
-      
-    # ---------------- Tree context menu and actions ----------------
-    
+        self._conferente_names_cache = [c["name"] for c in conferentes]
+        return list(self._conferente_names_cache)
+
     def _get_note_by_iid(self, iid):
-        vals = self.tree.item(iid)["values"]
-        if not vals:
-            return None
-        nf = vals[0]
-        notes = utils.load_notes()
-        for n in notes:
-            if str(n.get("nf_number")) == str(nf):
-                return n
-        return None
-    
+        return self._get_note_by_row(iid)
+
     def _save_notes_list(self, notes):
-        # Try convenient functions on utils; fallback to generic save_all if present
         if hasattr(utils, "save_all_notes"):
             utils.save_all_notes(notes)
             return True
-        # fallback: if utils exposes notes_path, write JSON directly
         if hasattr(utils, "notes_path"):
             import json
             with open(utils.notes_path(), "w", encoding="utf-8") as f:
                 json.dump(notes, f, ensure_ascii=False, indent=2)
             return True
-        # otherwise we can't persist
         return False
-         
+
     def _search_notes(self):
-        termo = self.search_entry.get().strip().lower()
+        termo = self.search_entry.text().strip().lower()
         if not termo:
             self.refresh_table()
             return
 
-        filtro_tipo = self.search_option.get()
+        filtro_tipo = self._current_search_mode()
         notes = utils.load_notes()
-
-        # aplica os filtros normais primeiro
         notes = self._apply_filters(notes)
 
-        # agora filtra pela pesquisa
-        if filtro_tipo == "Nota Fiscal":
+        if filtro_tipo in ("NF", "Nota Fiscal"):
             notes = [n for n in notes if termo in str(n.get("nf_number", "")).lower()]
         elif filtro_tipo == "Fornecedor":
             notes = [n for n in notes if termo in str(n.get("fornecedor_name", "")).lower()]
 
-        # repopula a tabela
         self._populate_table(notes)
 
-    # ---------------- Helpers ----------------
-    
     def _ask_name_non_modal(self):
-        """Abre uma janelinha não-modal para perguntar o nome do usuário"""
-        top = ctk.CTkToplevel(self.root)
-        top.title("Identificação")
-        top.geometry(self.center_geometry(200, 300))
-        top.geometry("300x150")
-        top.grab_set()  # opcional → mantém foco na janelinha, mas sem bloquear o mainloop
+        if hasattr(self, "_name_dialog") and self._name_dialog.isVisible():
+            return
 
-        label = ctk.CTkLabel(top, text="Digite seu nome:")
-        label.pack(pady=(20, 10))
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Identificacao")
+        dialog.setFixedSize(300, 150)
+        layout = QtWidgets.QVBoxLayout(dialog)
 
-        entry = ctk.CTkEntry(top, width=220, text_color="white", justify="center")
-        entry.pack(pady=5)
+        layout.addWidget(QtWidgets.QLabel("Digite seu nome:", dialog))
+        entry = QtWidgets.QLineEdit(dialog)
+        style_text_field(entry, center=True)
+        layout.addWidget(entry)
+
+        btn = QtWidgets.QPushButton("Salvar", dialog)
+        layout.addWidget(btn)
 
         def salvar():
-            name = entry.get().strip() or "Usuário"
-            resp = utils.supabase.table("users").insert({
-                "mac": self.mac,
-                "name": name
-            }).execute()
+            name = entry.text().strip() or "Usuario"
+            resp = utils.supabase.table("users").insert({"mac": self.mac, "name": name}).execute()
             if resp.data:
                 self.user = resp.data[0]
-            top.destroy()
+            dialog.accept()
 
-        btn = ctk.CTkButton(top, text="Salvar", command=salvar)
-        btn.pack(pady=15)
+        btn.clicked.connect(salvar)
+        entry.returnPressed.connect(salvar)
+        entry.setFocus()
+        self._name_dialog = dialog
+        self._show_blocking_dialog(dialog)
 
-        entry.focus()
-    
     def show_add_form(self):
-        # refresh supplier/conferente values before show
-        self.combobox_supplier.configure(values=self._supplier_names())
-        self.combo_conferente.configure(values=self._conferente_names())
-        self.date_var.set(utils.today_br())
-        self.show_page("add_form")
+        dialog = self._ensure_add_form_window()
+        suppliers = self._supplier_names()
+        conferentes = self._conferente_names()
+        self.combobox_supplier.clear()
+        self.combobox_supplier.addItems(suppliers)
+        if hasattr(self, "combobox_supplier"):
+            self.combobox_supplier.setCurrentIndex(0 if self.combobox_supplier.count() else -1)
+        self.combo_conferente.clear()
+        self.combo_conferente.addItems(conferentes)
+        if hasattr(self, "combo_conferente"):
+            self.combo_conferente.setCurrentIndex(0 if self.combo_conferente.count() else -1)
+        self.entry_date.setDate(QtCore.QDate.currentDate())
+        self.entry_date_emissao.setDate(QtCore.QDate.currentDate())
+        self.combo_cnpj.setCurrentIndex(0)
+        self.entry_nf.clear()
+        self._show_blocking_dialog(dialog, y_offset=24)
+        QtCore.QTimer.singleShot(180, self.entry_nf.setFocus)
 
     def show_manage_suppliers(self):
         self.refresh_suppliers_listbox()
-        self.show_page("manage_suppliers")
+        dialog = self._ensure_suppliers_dialog()
+        self._show_blocking_dialog(dialog, y_offset=20)
+        QtCore.QTimer.singleShot(180, self.supplier_name_entry.setFocus)
 
     def show_manage_conferentes(self):
         self.refresh_conferentes_listbox()
-        self.show_page("manage_conferentes")
-   
+        dialog = self._ensure_conferentes_dialog()
+        self._show_blocking_dialog(dialog, y_offset=20)
+        QtCore.QTimer.singleShot(180, self.conf_name_entry.setFocus)
+
     def on_close(self):
-        self.root.destroy()
+        self.close()
 
     def _setup_tooltip_support(self):
-        self.tooltip = None
-        self.tree.bind("<Motion>", self._on_motion)
-        self.tree.bind("<Leave>", lambda e: self._hide_tooltip())
-
-    def _on_motion(self, event):
-        region = self.tree.identify("region", event.x, event.y)
-        if region != "cell":
-            self._hide_tooltip()
-            return
-
-        row_id = self.tree.identify_row(event.y)
-        col_id = self.tree.identify_column(event.x)
-
-        values = self.tree.item(row_id, "values")
-        if not row_id or not values:
-            self._hide_tooltip()
-            return
-
-        # --- Tooltip de conferência (coluna 6) ---
-        if col_id == "#6":
-            if len(values) < 6 or values[5] != "✔":
-                self._hide_tooltip()
-                return
-            nf_number = values[0]
-            notes = utils.load_notes()
-            note = next((n for n in notes if n["nf_number"] == nf_number), None)
-            if not note:
-                return
-            texto = f'{note.get("conferido_por", "?")} em {note.get("conferido_em", "?")}'
-            self._show_tooltip(event, texto)
-            return
-
-        # --- Tooltip de data de emissão (coluna 2 - Data de Chegada) ---
-        if col_id == "#2":
-            nf_number = values[0]
-            notes = utils.load_notes()
-            note = next((n for n in notes if n["nf_number"] == nf_number), None)
-            if not note:
-                return
-            data_emissao = note.get("data_emissao")
-            if not data_emissao:
-                self._hide_tooltip()
-                return
-            texto = f"Data de emissão: {data_emissao}"
-            self._show_tooltip(event, texto)
-            return
-
-        # Se não for conferência nem data emissão → esconde
-        self._hide_tooltip()
-
-    def _show_tooltip(self, event, text):
-        if self.tooltip:
-            self.tooltip.destroy()
-        self.tooltip = tk.Toplevel(self.tree)
-        self.tooltip.wm_overrideredirect(True)
-        self.tooltip.wm_geometry(f"+{event.x_root+15}+{event.y_root+15}")
-        tk.Label(
-            self.tooltip,
-            text=text,
-            background="black",
-            foreground="white",
-        padx=4,
-        pady=2,
-        font=("Segoe UI", 9)
-    ).pack()
-
-    def _hide_tooltip(self):
-        if self.tooltip:
-            self.tooltip.destroy()
-            self.tooltip = None
+        pass
 
     def _bind_search_suggestions(self):
-        self.search_entry.bind("<KeyRelease>", self._update_suggestions)
-        self.search_entry.bind("<FocusOut>", lambda e: self.root.after(100, self._hide_suggestions))
+        self.search_model = QtCore.QStringListModel([])
+        self.search_completer = QtWidgets.QCompleter(self.search_model, self.search_entry)
+        self.search_completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        self.search_completer.setFilterMode(QtCore.Qt.MatchContains)
+        self.search_completer.activated.connect(self._select_suggestion)
+        self.search_entry.setCompleter(self.search_completer)
+        self.search_suggest_timer = QtCore.QTimer(self)
+        self.search_suggest_timer.setSingleShot(True)
+        self.search_suggest_timer.setInterval(160)
+        self.search_suggest_timer.timeout.connect(self._update_suggestions)
+        self.search_entry.textEdited.connect(lambda _text: self.search_suggest_timer.start())
+        self.search_entry.installEventFilter(self)
 
-    def _update_suggestions(self, event):
-        termo = self.search_entry.get().strip().lower()
-        filtro_tipo = self.search_option.get()
+    def _update_suggestions(self):
+        termo = self.search_entry.text().strip().lower()
+        filtro_tipo = self._current_search_mode()
 
-        notes = utils.load_notes()
-        notes = self._apply_filters(notes)
+        if len(termo) < 2:
+            self.search_model.setStringList([])
+            return
 
-        if filtro_tipo == "Nota Fiscal":
+        notes = list(getattr(self, "last_visible_notes", []))
+        if not notes:
+            notes = utils.load_notes()
+            notes = self._apply_filters(notes)
+
+        if filtro_tipo in ("NF", "Nota Fiscal"):
             valores = [str(n.get("nf_number", "")) for n in notes]
         else:
             valores = [str(n.get("fornecedor_name", "")) for n in notes]
 
         sugestoes = sorted(set([v for v in valores if termo in v.lower()]))[:8]
-
-        self._hide_suggestions()
-        if not termo or not sugestoes:
-            return
-
-        # criar janela flutuante logo abaixo do entry
-        x = self.search_entry.winfo_rootx()
-        y = self.search_entry.winfo_rooty() + self.search_entry.winfo_height()
-
-        self.suggestion_win = tk.Toplevel(self.root)
-        self.suggestion_win.wm_overrideredirect(True)  # sem bordas
-        self.suggestion_win.geometry(f"+{x}+{y}")
-        self.suggestion_win.configure(bg="#2b2b2b")  # fundo escuro
-
-        for s in sugestoes:
-            lbl = ctk.CTkLabel(
-                self.suggestion_win,
-                text=s,
-                anchor="w",
-                fg_color="transparent"
-            )
-            lbl.pack(fill="x", padx=4, pady=2)
-
-            # ao clicar, seleciona
-            lbl.bind("<Button-1>", lambda e, val=s: self._select_suggestion(val))
+        self.search_model.setStringList(sugestoes)
 
     def _select_suggestion(self, value):
-        self.search_entry.delete(0, "end")
-        self.search_entry.insert(0, value)
-        self._hide_suggestions()
+        self.search_entry.setText(value)
         self._search_notes()
 
-    def _hide_suggestions(self):
-        if hasattr(self, "suggestion_win") and self.suggestion_win.winfo_exists():
-            self.suggestion_win.destroy()
+    def eventFilter(self, obj, event):
+        if obj is self.search_entry and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Tab:
+                self._handle_autocomplete()
+                return True
+        return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):
+        event.accept()
 
 if __name__ == "__main__":
-    from utils_estoque import check_for_updates
-    root = ctk.CTk()
-    check_for_updates(root)
-    app = EstoqueApp(root)
-    root.mainloop()
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
+    window = EstoqueApp()
+    utils.check_for_updates(window)
+    window.showMaximized()
+    sys.exit(app.exec())

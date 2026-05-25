@@ -12,3 +12,10 @@ __pycache__/
 *.exe
 *.spec
 *.txt
+
+# Arquivos locais do agente/testes
+.agents/
+artifacts/
+skills-lock.json
+supabase_schema.sql
+image.png

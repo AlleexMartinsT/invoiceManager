@@ -1,56 +1,729 @@
-import customtkinter
+import sys
 
-# Classes auxiliares de interface (Toast, make_label, pad_values)
+from PySide6 import QtCore, QtGui, QtWidgets
+
+PALETTE = {
+    "bg": "#07111F",
+    "bg_alt": "#0B1728",
+    "panel": "#0F1C2E",
+    "panel_alt": "#132238",
+    "panel_soft": "#18293F",
+    "border": "#223349",
+    "text": "#F8FAFC",
+    "muted": "#94A3B8",
+    "subtle": "#64748B",
+    "accent": "#F97316",
+    "blue": "#38BDF8",
+    "green": "#22C55E",
+    "orange": "#FB923C",
+    "red": "#F43F5E",
+}
+
+APP_FONT_FAMILY = "Lexend"
+FIELD_HEIGHT = 48
+SMALL_FIELD_HEIGHT = 42
+
+
+def _color(hex_color, alpha=255):
+    color = QtGui.QColor(hex_color)
+    color.setAlpha(alpha)
+    return color
+
+
+def polish(widget):
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
+def normalize_ui_text(text):
+    if isinstance(text, str) and "Ã" in text:
+        try:
+            return text.encode("latin1").decode("utf-8")
+        except UnicodeError:
+            return text
+    return text
+
+
+def apply_shadow(widget, blur=36, y_offset=14, color="#020817", alpha=110):
+    shadow = QtWidgets.QGraphicsDropShadowEffect(widget)
+    shadow.setBlurRadius(blur)
+    shadow.setOffset(0, y_offset)
+    shadow.setColor(_color(color, alpha))
+    widget.setGraphicsEffect(shadow)
+    return shadow
+
+
+def make_panel(master, kind="surface"):
+    frame = QtWidgets.QFrame(master)
+    frame.setProperty("card", True)
+    frame.setProperty("kind", kind)
+    return frame
+
+
+def make_badge(master, text, tone="accent"):
+    frame = QtWidgets.QFrame(master)
+    frame.setProperty("badge", tone)
+    layout = QtWidgets.QHBoxLayout(frame)
+    layout.setContentsMargins(10, 4, 10, 4)
+    layout.setSpacing(0)
+    label = QtWidgets.QLabel(normalize_ui_text(text), frame)
+    label.setProperty("badgeTone", tone)
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    layout.addWidget(label)
+    return frame
+
+
+def style_button(button, accent=False, quiet=False, nav=False):
+    button.setProperty("accent", accent)
+    button.setProperty("quiet", quiet)
+    button.setProperty("nav", nav)
+    if not getattr(button, "_click_feedback_bound", False):
+        button.pressed.connect(lambda b=button: _set_button_pressed(b, True))
+        button.released.connect(
+            lambda b=button: QtCore.QTimer.singleShot(110, lambda: _set_button_pressed(b, False))
+        )
+        button._click_feedback_bound = True
+    polish(button)
+
+
+def _set_button_pressed(button, pressed):
+    try:
+        button.setProperty("pressedFeedback", pressed)
+        polish(button)
+        if pressed:
+            _spawn_button_pulse(button)
+    except RuntimeError:
+        return
+
+
+def _spawn_button_pulse(button):
+    pulse = QtWidgets.QFrame(button)
+    pulse.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+    pulse.setGeometry(button.rect())
+    pulse.setStyleSheet(
+        "background: rgba(125, 211, 252, 0.28);"
+        "border: 1px solid rgba(240, 249, 255, 0.40);"
+        "border-radius: 16px;"
+    )
+    effect = QtWidgets.QGraphicsOpacityEffect(pulse)
+    effect.setOpacity(0.85)
+    pulse.setGraphicsEffect(effect)
+    pulse.show()
+    pulse.raise_()
+
+    animation = QtCore.QPropertyAnimation(effect, b"opacity", pulse)
+    animation.setDuration(180)
+    animation.setStartValue(0.85)
+    animation.setEndValue(0.0)
+    animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+    animation.finished.connect(pulse.deleteLater)
+    pulse._pulse_animation = animation
+    animation.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
+
+
+class ComboFieldDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, parent=None, center=True):
+        super().__init__(parent)
+        self.center = center
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = (
+            QtCore.Qt.AlignCenter if self.center else QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        )
+
+
+class CenteredComboBox(QtWidgets.QComboBox):
+    def __init__(self, parent=None, center=True):
+        super().__init__(parent)
+        self._center_text = center
+
+    def setCenterText(self, center):
+        self._center_text = center
+        self.update()
+
+    def _fit_text_font(self, text, available_width):
+        font = QtGui.QFont(self.font())
+        min_size = float(self.property("minimumTextPointSize") or 8)
+        point_size = font.pointSizeF()
+        if point_size <= 0:
+            point_size = 10.0
+            font.setPointSizeF(point_size)
+
+        while point_size > min_size and QtGui.QFontMetrics(font).horizontalAdvance(text) > available_width:
+            point_size -= 0.5
+            font.setPointSizeF(point_size)
+        return font
+
+    def paintEvent(self, _event):
+        painter = QtWidgets.QStylePainter(self)
+        painter.setPen(self.palette().color(QtGui.QPalette.Text))
+
+        option = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = ""
+        painter.drawComplexControl(QtWidgets.QStyle.CC_ComboBox, option)
+
+        if self._center_text:
+            text_rect = self.rect()
+            alignment = QtCore.Qt.AlignCenter
+        else:
+            text_rect = self.style().subControlRect(
+                QtWidgets.QStyle.CC_ComboBox,
+                option,
+                QtWidgets.QStyle.SC_ComboBoxEditField,
+                self,
+            )
+            alignment = QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        draw_rect = text_rect.adjusted(8, 0, -8, 0)
+        text = self.currentText()
+        painter.setFont(self._fit_text_font(text, draw_rect.width()))
+        painter.drawText(draw_rect, alignment, text)
+
+
+class ComboPopupClickFilter(QtCore.QObject):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._popup_opened_by_filter = False
+
+    def eventFilter(self, watched, event):
+        if (
+            isinstance(watched, QtWidgets.QComboBox)
+            and event.type() == QtCore.QEvent.MouseButtonPress
+            and event.button() == QtCore.Qt.LeftButton
+        ):
+            watched.setFocus(QtCore.Qt.MouseFocusReason)
+            if watched.view().isVisible():
+                watched.hidePopup()
+            else:
+                self._popup_opened_by_filter = True
+                watched.showPopup()
+                QtCore.QTimer.singleShot(0, self._release_popup_guard)
+            event.accept()
+            return True
+        if (
+            isinstance(watched, QtWidgets.QComboBox)
+            and event.type() == QtCore.QEvent.MouseButtonRelease
+            and self._popup_opened_by_filter
+        ):
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _release_popup_guard(self):
+        self._popup_opened_by_filter = False
+
+
+class ComboArrowStyle(QtWidgets.QProxyStyle):
+    def drawComplexControl(self, control, option, painter, widget=None):
+        super().drawComplexControl(control, option, painter, widget)
+        if control != QtWidgets.QStyle.CC_ComboBox or not isinstance(widget, QtWidgets.QComboBox):
+            return
+
+        arrow_rect = self.subControlRect(control, option, QtWidgets.QStyle.SC_ComboBoxArrow, widget)
+        if not arrow_rect.isValid() or arrow_rect.width() <= 0:
+            return
+
+        center = arrow_rect.center()
+        points = QtGui.QPolygon(
+            [
+                QtCore.QPoint(center.x() - 4, center.y() - 2),
+                QtCore.QPoint(center.x() + 4, center.y() - 2),
+                QtCore.QPoint(center.x(), center.y() + 3),
+            ]
+        )
+
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor("#FFFFFF"))
+        painter.drawPolygon(points)
+        painter.restore()
+
+
+class ClickableDateEdit(QtWidgets.QDateEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._calendar_popup = None
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setKeyboardTracking(False)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.setFocus(QtCore.Qt.MouseFocusReason)
+            self._sync_display_text()
+            self.open_calendar_popup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            self.open_calendar_popup()
+            return
+        super().keyPressEvent(event)
+
+    def open_calendar_popup(self):
+        if self._calendar_popup and self._calendar_popup.isVisible():
+            self._calendar_popup.close()
+            return
+
+        if not self.date().isValid():
+            self.setDate(QtCore.QDate.currentDate())
+        self._sync_display_text()
+
+        app = QtWidgets.QApplication.instance()
+        if app:
+            for widget in app.topLevelWidgets():
+                if widget is not self._calendar_popup and widget.objectName() == "datePickerPopup":
+                    widget.close()
+
+        popup = QtWidgets.QFrame(None, QtCore.Qt.Popup)
+        popup.setObjectName("datePickerPopup")
+        popup.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+        popup.setStyleSheet(
+            "QFrame#datePickerPopup {"
+            "background: rgba(11, 23, 40, 246);"
+            "border: 1px solid rgba(255, 255, 255, 28);"
+            "border-radius: 18px;"
+            "}"
+        )
+        layout = QtWidgets.QVBoxLayout(popup)
+        layout.setContentsMargins(8, 8, 8, 8)
+        calendar = QtWidgets.QCalendarWidget(popup)
+        calendar.setSelectedDate(self.date())
+        calendar.clicked.connect(lambda date: self._select_popup_date(date, popup))
+        layout.addWidget(calendar)
+        popup.resize(330, 270)
+        popup.move(self.mapToGlobal(QtCore.QPoint(0, self.height() + 6)))
+        popup.destroyed.connect(lambda *_: setattr(self, "_calendar_popup", None))
+        self._calendar_popup = popup
+        popup.show()
+
+    def _select_popup_date(self, date, popup):
+        self.setDate(date)
+        self._sync_display_text()
+        popup.close()
+
+    def _sync_display_text(self):
+        line_edit = self.lineEdit()
+        if line_edit:
+            line_edit.setAlignment(QtCore.Qt.AlignCenter)
+            line_edit.setText(self.date().toString(self.displayFormat()))
+
+
+def style_text_field(field, center=False, width=None, height=FIELD_HEIGHT):
+    if width is not None:
+        field.setFixedWidth(width)
+    field.setProperty("formField", height > FIELD_HEIGHT)
+    field.setProperty("compactFormField", height < FIELD_HEIGHT)
+    field.setAlignment(
+        QtCore.Qt.AlignCenter if center else QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+    )
+    polish(field)
+    field.setFixedHeight(height)
+
+
+def style_combo_field(combo, center=True, height=FIELD_HEIGHT):
+    combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+    combo.setProperty("formField", height > FIELD_HEIGHT)
+    combo.setProperty("compactFormField", height < FIELD_HEIGHT)
+    if isinstance(combo, CenteredComboBox):
+        combo.setEditable(False)
+        combo.setCenterText(center)
+    else:
+        combo.setEditable(True)
+        combo.lineEdit().setReadOnly(True)
+        combo.lineEdit().setFocusPolicy(QtCore.Qt.NoFocus)
+        combo.lineEdit().setCursor(QtCore.Qt.ArrowCursor)
+        combo.lineEdit().setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        combo.lineEdit().setAlignment(
+            QtCore.Qt.AlignCenter if center else QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        )
+    combo.setFocusPolicy(QtCore.Qt.StrongFocus)
+    combo.setCursor(QtCore.Qt.PointingHandCursor)
+    combo.setItemDelegate(ComboFieldDelegate(combo, center=center))
+    combo.view().setItemDelegate(ComboFieldDelegate(combo.view(), center=center))
+    combo.view().setTextElideMode(QtCore.Qt.ElideNone)
+    combo.view().setAlternatingRowColors(False)
+    combo.setMaxVisibleItems(12)
+    combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContentsOnFirstShow)
+    if not getattr(combo, "_popup_click_filter", None):
+        combo._popup_click_filter = ComboPopupClickFilter(combo)
+        combo.installEventFilter(combo._popup_click_filter)
+    if not isinstance(combo.style(), ComboArrowStyle):
+        combo._combo_arrow_style = ComboArrowStyle(combo.style())
+        combo.setStyle(combo._combo_arrow_style)
+    polish(combo)
+    combo.setFixedHeight(height)
+
+
+def style_date_field(date_edit, width=220, height=FIELD_HEIGHT, display_format="dd-MM-yyyy"):
+    date_edit.setCalendarPopup(not isinstance(date_edit, ClickableDateEdit))
+    date_edit.setDisplayFormat(display_format)
+    date_edit.setAlignment(QtCore.Qt.AlignCenter)
+    date_edit.setKeyboardTracking(False)
+    if isinstance(date_edit, ClickableDateEdit):
+        date_edit.setReadOnly(True)
+        date_edit.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+    else:
+        date_edit.setButtonSymbols(QtWidgets.QAbstractSpinBox.UpDownArrows)
+    if date_edit.lineEdit():
+        date_edit.lineEdit().setAlignment(QtCore.Qt.AlignCenter)
+    if width is not None:
+        date_edit.setFixedWidth(width)
+    date_edit.setProperty("formField", height > FIELD_HEIGHT)
+    date_edit.setProperty("compactFormField", height < FIELD_HEIGHT)
+    date_edit.setProperty("dateField", True)
+    polish(date_edit)
+    date_edit.setFixedHeight(height)
+    if isinstance(date_edit, ClickableDateEdit):
+        date_edit._sync_display_text()
+
+
+def animate_widget_entry(widget, duration=240, y_offset=18):
+    if widget.isWindow():
+        end_pos = widget.pos()
+        start_pos = end_pos + QtCore.QPoint(0, y_offset)
+        widget.move(start_pos)
+        widget.setWindowOpacity(0.0)
+
+        position_anim = QtCore.QPropertyAnimation(widget, b"pos", widget)
+        position_anim.setDuration(duration)
+        position_anim.setStartValue(start_pos)
+        position_anim.setEndValue(end_pos)
+        position_anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+
+        opacity_anim = QtCore.QPropertyAnimation(widget, b"windowOpacity", widget)
+        opacity_anim.setDuration(duration)
+        opacity_anim.setStartValue(0.0)
+        opacity_anim.setEndValue(1.0)
+        opacity_anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+
+        group = QtCore.QParallelAnimationGroup(widget)
+        group.addAnimation(position_anim)
+        group.addAnimation(opacity_anim)
+        widget._entry_animation = group
+        group.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
+        return group
+
+    effect = widget.graphicsEffect()
+    if not isinstance(effect, QtWidgets.QGraphicsOpacityEffect):
+        effect = QtWidgets.QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+
+    effect.setOpacity(0.0)
+    animation = QtCore.QPropertyAnimation(effect, b"opacity", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(0.0)
+    animation.setEndValue(1.0)
+    animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+    widget._entry_animation = animation
+    animation.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
+    return animation
+
 
 def make_label(master, text, **kw):
-    return customtkinter.CTkLabel(master, text=text, anchor="w", **kw)
+    label = QtWidgets.QLabel(normalize_ui_text(text), master)
+    align = kw.get("anchor")
+    if align == "w":
+        label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+    elif align == "center":
+        label.setAlignment(QtCore.Qt.AlignCenter)
+
+    if kw.get("muted"):
+        label.setProperty("muted", True)
+    if kw.get("eyebrow"):
+        label.setProperty("eyebrow", True)
+    if kw.get("hero"):
+        label.setProperty("hero", True)
+
+    font = kw.get("font")
+    if font:
+        family = font[0] if len(font) > 0 else None
+        size = font[1] if len(font) > 1 else None
+        weight = QtGui.QFont.Bold if len(font) > 2 and "bold" in str(font[2]).lower() else QtGui.QFont.Normal
+        qfont = label.font()
+        qfont.setFamily(APP_FONT_FAMILY if family else APP_FONT_FAMILY)
+        if size:
+            qfont.setPointSize(int(size))
+        qfont.setWeight(weight)
+        label.setFont(qfont)
+    return label
+
+
+def install_messagebox_tweaks():
+    if getattr(QtWidgets.QMessageBox, "_estoque_tweaked", False):
+        return
+
+    def information(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+        msg = QtWidgets.QMessageBox(parent)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        msg.setStandardButtons(buttons)
+        if defaultButton != QtWidgets.QMessageBox.NoButton:
+            msg.setDefaultButton(defaultButton)
+        icon = msg.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation)
+        msg.setIconPixmap(icon.pixmap(24, 24))
+        return msg.exec()
+
+    QtWidgets.QMessageBox.information = staticmethod(information)
+    QtWidgets.QMessageBox._estoque_tweaked = True
+
 
 def pad_values(valores, largura=22):
-            return [v.ljust(largura) for v in valores]
-        
-class Toast(customtkinter.CTkToplevel):
+    return [v.ljust(largura) for v in valores]
+
+
+class GradientCanvas(QtWidgets.QWidget):
+    def paintEvent(self, _event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        gradient = QtGui.QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0, _color(PALETTE["bg"]))
+        gradient.setColorAt(1, _color(PALETTE["bg_alt"]))
+        painter.fillRect(self.rect(), gradient)
+
+        blobs = (
+            (-60, -30, 320, PALETTE["accent"], 42),
+            (self.width() - 260, -70, 360, PALETTE["green"], 28),
+            (self.width() - 220, self.height() - 220, 300, PALETTE["blue"], 22),
+        )
+        for x, y, size, color, alpha in blobs:
+            radial = QtGui.QRadialGradient(x + size / 2, y + size / 2, size / 2)
+            radial.setColorAt(0, _color(color, alpha))
+            radial.setColorAt(1, _color(color, 0))
+            painter.setBrush(radial)
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.drawEllipse(QtCore.QRectF(x, y, size, size))
+
+        pen = QtGui.QPen(_color("#FFFFFF", 10))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        top = 110
+        step = 72
+        for y in range(top, self.height(), step):
+            painter.drawLine(32, y, self.width() - 32, y)
+
+
+class MetricCard(QtWidgets.QFrame):
+    TONES = {
+        "blue": ("#38BDF8", "#D9F3FF"),
+        "accent": ("#F97316", "#FFE5CF"),
+        "green": ("#22C55E", "#DCFCE7"),
+    }
+
+    def __init__(self, parent, title, tone="blue"):
+        super().__init__(parent)
+        self.tone = tone if tone in self.TONES else "blue"
+        self._ratio = 0.58
+        self.setProperty("card", True)
+        self.setProperty("kind", "metric")
+        apply_shadow(self, blur=28, y_offset=10, alpha=60)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(8)
+        layout.setAlignment(QtCore.Qt.AlignCenter)
+
+        self.title_label = QtWidgets.QLabel(title, self)
+        self.title_label.setProperty("muted", True)
+        self.title_label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.title_label, 0, QtCore.Qt.AlignCenter)
+
+        self.value_label = QtWidgets.QLabel("0", self)
+        self.value_label.setProperty("metricValue", True)
+        self.value_label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.value_label, 0, QtCore.Qt.AlignCenter)
+
+        self.detail_label = QtWidgets.QLabel("", self)
+        self.detail_label.setProperty("metricDetail", True)
+        self.detail_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.detail_label.setWordWrap(True)
+        layout.addWidget(self.detail_label, 0, QtCore.Qt.AlignCenter)
+
+        self._apply_tone()
+
+    def _apply_tone(self):
+        tone_color, text_color = self.TONES[self.tone]
+        self.detail_label.setStyleSheet(
+            f"color: {tone_color}; font-size: 11px; font-weight: 700;"
+        )
+        self.value_label.setStyleSheet(f"color: {text_color}; font-size: 30px; font-weight: 700;")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+    def set_data(self, value, detail, ratio=0.58):
+        self.value_label.setText(str(value))
+        self.detail_label.setText(detail)
+        self._ratio = max(0.16, min(1.0, ratio))
+
+
+class PillDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, palette_map, parent=None):
+        super().__init__(parent)
+        self.palette_map = {key.lower(): value for key, value in palette_map.items()}
+
+    def paint(self, painter, option, index):
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        if opt.widget:
+            opt.widget.style().drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        text = str(index.data() or "").strip()
+        if not text:
+            return
+
+        bg, fg = self.palette_map.get(text.lower(), ("#132238", "#D9E2F2"))
+        rect = option.rect.adjusted(10, 8, -10, -8)
+
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(_color(bg))
+        painter.drawRoundedRect(rect, 12, 12)
+
+        font = option.font
+        font.setPointSize(max(9, font.pointSize() - 1))
+        font.setWeight(QtGui.QFont.DemiBold)
+        painter.setFont(font)
+        painter.setPen(_color(fg))
+        painter.drawText(rect, QtCore.Qt.AlignCenter, text)
+        painter.restore()
+
+
+class Toast(QtWidgets.QWidget):
     active_toasts = []
+    _tray_icon = None
 
-    def __init__(self, master, text, **kwargs):
-        super().__init__(master, **kwargs)
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
+    def __init__(self, parent, text, timeout_ms=4200):
+        super().__init__(None)
+        if self._show_native_notification(parent, text):
+            return
 
-        # frame fundo (não deixa expandir)
-        frame = customtkinter.CTkFrame(self, fg_color="#333333", corner_radius=8)
-        frame.pack(padx=1, pady=1)  # sem expand
-
-        # texto
-        label = customtkinter.CTkLabel(
-            frame, text=text,
-            text_color="white",
-            anchor="w",
-            padx=10, pady=5
+        self.setWindowFlags(
+            QtCore.Qt.ToolTip
+            | QtCore.Qt.FramelessWindowHint
+            | QtCore.Qt.WindowStaysOnTopHint
         )
-        label.pack(side="left")
 
-        # botão X
-        close_btn = customtkinter.CTkButton(
-            frame, text="✕",
-            width=20, height=20,
-            fg_color="transparent",
-            hover_color="#555555",
-            text_color="white",
-            command=self._close
+        frame = make_panel(self, "toast")
+        layout = QtWidgets.QHBoxLayout(frame)
+        layout.setContentsMargins(14, 10, 10, 10)
+        layout.setSpacing(10)
+
+        accent = QtWidgets.QFrame(frame)
+        accent.setFixedWidth(5)
+        accent.setStyleSheet(
+            f"background: {PALETTE['accent']}; border-radius: 3px;"
         )
-        close_btn.pack(side="right", padx=5, pady=5)
+        layout.addWidget(accent)
 
-        # força janela no tamanho mínimo possível
-        self.update_idletasks()
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = self.winfo_reqwidth(), self.winfo_reqheight()  # usa tamanho requerido
-        x = sw - w - 20
-        y = sh - h - 60 - sum(t.winfo_height() + 10 for t in Toast.active_toasts)
-        self.geometry(f"{w}x{h}+{x}+{y}")
+        label = QtWidgets.QLabel(text, frame)
+        label.setWordWrap(True)
+        label.setProperty("toastText", True)
+        layout.addWidget(label, 1)
 
+        close_btn = QtWidgets.QPushButton("x", frame)
+        close_btn.setFixedSize(22, 22)
+        close_btn.setProperty("quiet", True)
+        close_btn.clicked.connect(self._close)
+        layout.addWidget(close_btn, 0, QtCore.Qt.AlignTop)
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(frame)
+
+        self.setStyleSheet(
+            "QFrame[card=\"true\"][kind=\"toast\"] {"
+            "background: rgba(11, 23, 40, 242);"
+            "border: 1px solid rgba(255, 255, 255, 24);"
+            "border-radius: 16px;"
+            "}"
+            "QLabel[toastText=\"true\"] {"
+            f"color: {PALETTE['text']};"
+            "font-size: 12px;"
+            "font-weight: 500;"
+            "}"
+            "QPushButton[quiet=\"true\"] {"
+            "background: rgba(255, 255, 255, 0.06);"
+            "border: none;"
+            "border-radius: 11px;"
+            f"color: {PALETTE['text']};"
+            "padding: 0px;"
+            "}"
+        )
+
+        apply_shadow(frame, blur=26, y_offset=12, alpha=90)
+
+        self.adjustSize()
+        self._position(parent)
         Toast.active_toasts.append(self)
+        self.show()
+        QtCore.QTimer.singleShot(timeout_ms, self._close)
+
+    def _show_native_notification(self, parent, text):
+        if not sys.platform.startswith("win"):
+            return False
+        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            return False
+
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            return False
+        app.setApplicationName("Relatorio do Estoque")
+        if hasattr(app, "setApplicationDisplayName"):
+            app.setApplicationDisplayName("Relatorio do Estoque")
+
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RelatorioEstoque.App")
+        except Exception:
+            pass
+
+        icon = QtGui.QIcon()
+        if parent and hasattr(parent, "windowIcon"):
+            icon = parent.windowIcon()
+        if icon.isNull():
+            icon = app.windowIcon()
+        if icon.isNull():
+            icon = parent.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation) if parent else QtGui.QIcon()
+
+        if Toast._tray_icon is None:
+            Toast._tray_icon = QtWidgets.QSystemTrayIcon(icon, app)
+            Toast._tray_icon.setToolTip("Relatorio do Estoque")
+            Toast._tray_icon.show()
+        else:
+            Toast._tray_icon.setIcon(icon)
+
+        Toast._tray_icon.showMessage(
+            "Relatorio do Estoque",
+            text,
+            QtWidgets.QSystemTrayIcon.Information,
+            5000,
+        )
+        return True
+
+    def _position(self, parent):
+        screen = None
+        if parent and parent.windowHandle():
+            screen = parent.windowHandle().screen()
+        if not screen:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        rect = screen.availableGeometry()
+
+        offset = sum(t.height() + 12 for t in Toast.active_toasts)
+        x = rect.right() - self.width() - 22
+        y = rect.bottom() - self.height() - 28 - offset
+        self.move(x, y)
 
     def _close(self):
         if self in Toast.active_toasts:
             Toast.active_toasts.remove(self)
-        self.destroy()
+        self.close()

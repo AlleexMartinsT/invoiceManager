@@ -1,45 +1,105 @@
-import customtkinter as ctk
+from PySide6 import QtCore, QtWidgets
+
 import utils_estoque as utils
-import tkinter as tk
-from system.ui_components import make_label
+from system.ui_components import make_label, make_panel
+
 
 class SettingsMixin:
+    ALL_MONTHS_TEXT = "Visualizar todos os meses do ano"
+
+    def _make_all_months_control(self, parent):
+        wrapper = QtWidgets.QWidget(parent)
+        row = QtWidgets.QHBoxLayout(wrapper)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        checkbox = QtWidgets.QCheckBox("", wrapper)
+        checkbox.setFixedWidth(24)
+        checkbox.setChecked(self.settings.get("visualizar_todos_meses", False))
+        checkbox.stateChanged.connect(self._toggle_all_months)
+
+        label = make_label(wrapper, self.ALL_MONTHS_TEXT, muted=True)
+        label.setWordWrap(False)
+        label.setMinimumWidth(label.sizeHint().width() + 8)
+        label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        label.setCursor(QtCore.Qt.PointingHandCursor)
+        label.mousePressEvent = lambda event: checkbox.toggle()
+
+        row.addStretch(1)
+        row.addWidget(checkbox, 0, QtCore.Qt.AlignVCenter)
+        row.addWidget(label, 1)
+        row.addStretch(1)
+        return wrapper, checkbox
+
     def _build_settings_page(self, parent):
-        make_label(parent, "Configurações", font=("Segoe UI", 15, "bold")).pack(pady=(10, 6))
-        self.var_all_months = tk.BooleanVar(value=self.settings.get("visualizar_todos_meses", False))
-        cb = ctk.CTkCheckBox(
-            parent,
-            text="Visualizar todos os meses deste ano",
-            text_color="white",
-            variable=self.var_all_months,
-            command=self._toggle_all_months
-        )
-        cb.pack(anchor="w", padx=12, pady=6)
-        ctk.CTkButton(parent, text="Voltar", command=lambda: self.show_page("home")).pack(pady=20)
+        layout = QtWidgets.QVBoxLayout(parent)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
 
-    def _toggle_all_months(self):
-        self.settings["visualizar_todos_meses"] = self.var_all_months.get()
+        card = make_panel(parent, "surface")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setSpacing(10)
+        card_layout.addWidget(make_label(card, "Configurações", hero=True, anchor="center"))
+
+        checkbox_control, self.var_all_months = self._make_all_months_control(card)
+        card_layout.addWidget(checkbox_control)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+    def _set_all_months_enabled(self, enabled):
+        enabled = bool(enabled)
+        current = bool(self.settings.get("visualizar_todos_meses", False))
+        if current == enabled:
+            return
+
+        self.settings["visualizar_todos_meses"] = enabled
         utils.save_settings(self.settings)
-        self.refresh_table()
-    
+
+        if hasattr(self, "var_all_months") and self.var_all_months.isChecked() != enabled:
+            self.var_all_months.blockSignals(True)
+            self.var_all_months.setChecked(enabled)
+            self.var_all_months.blockSignals(False)
+
+        if hasattr(self, "_settings_dialog_checkbox") and self._settings_dialog_checkbox.isChecked() != enabled:
+            self._settings_dialog_checkbox.blockSignals(True)
+            self._settings_dialog_checkbox.setChecked(enabled)
+            self._settings_dialog_checkbox.blockSignals(False)
+
+        if hasattr(self, "_refresh_scope_badge"):
+            self._refresh_scope_badge()
+
+        cached_notes = list(getattr(self, "_all_notes_cache", [])) if hasattr(self, "_all_notes_cache") else None
+        if cached_notes is not None:
+            QtCore.QTimer.singleShot(0, lambda notes=cached_notes: self.refresh_table(notes=notes))
+        else:
+            QtCore.QTimer.singleShot(0, self.refresh_table)
+
+    def _toggle_all_months(self, state=None):
+        if state is None:
+            enabled = self.var_all_months.isChecked()
+        else:
+            enabled = bool(state)
+        self._set_all_months_enabled(enabled)
+
     def show_settings_page(self):
-        # cria nova janela
-        win = ctk.CTkToplevel(self.root)
-        win.title("Configurações")
-        win.geometry(self.center_geometry(350,200))  # largura x altura, ajuste como quiser
-        win.grab_set()  # bloqueia interação com a janela principal até fechar
-        win.focus()
+        win = QtWidgets.QDialog(self)
+        win.setWindowTitle("Configurações")
+        win.setModal(True)
+        win.setFixedSize(420, 160)
+        layout = QtWidgets.QVBoxLayout(win)
 
-        make_label(win, "Configurações", font=("Segoe UI", 15, "bold")).pack(pady=(10, 6))
+        card = make_panel(win, "surface")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setSpacing(10)
+        card_layout.addWidget(make_label(card, "Configurações", hero=True, anchor="center"))
 
-        self.var_all_months = tk.BooleanVar(value=self.settings.get("visualizar_todos_meses", False))
-        cb = ctk.CTkCheckBox(
-            win,
-            text="Visualizar todos os meses deste ano",
-            variable=self.var_all_months,
-            command=self._toggle_all_months,
-            text_color="white"
-        )
-        cb.pack(anchor="center", padx=12, pady=6)
+        checkbox_control, cb = self._make_all_months_control(card)
+        self._settings_dialog_checkbox = cb
+        card_layout.addWidget(checkbox_control)
 
-        ctk.CTkButton(win, text="Fechar", command=win.destroy).pack(pady=20)
+        layout.addWidget(card)
+        self._exec_modal_dialog(win)

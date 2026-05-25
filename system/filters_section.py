@@ -1,457 +1,620 @@
-import customtkinter as ctk
-from tkinter import messagebox
-from system.ui_components import make_label
-import tkinter as tk
 from datetime import datetime
 
-class FiltersMixin:  
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from system.ui_components import (
+    ClickableDateEdit,
+    Toast,
+    make_badge,
+    make_label,
+    make_panel,
+    style_button,
+    style_combo_field,
+    style_date_field,
+    style_text_field,
+)
+from utils_estoque import load_notes
+
+
+class FiltersMixin:
+    def _set_filter_toggle_state(self, button, expanded, label):
+        button.setText(label)
+        button.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow)
+
+    def _make_filter_section_label(self, parent, text):
+        label = make_label(parent, text, font=("Segoe UI", 11, "bold"), anchor="center")
+        label.setProperty("filterSectionLabel", True)
+        label.style().unpolish(label)
+        label.style().polish(label)
+        return label
+
+    def _make_filter_field_label(self, parent, text):
+        label = make_label(parent, text, muted=True, anchor="center")
+        label.setProperty("filterFieldLabel", True)
+        label.setFixedWidth(42)
+        label.style().unpolish(label)
+        label.style().polish(label)
+        return label
+
+    def _make_filter_combo_label(self, parent, text):
+        label = make_label(parent, text, muted=True)
+        label.setProperty("filterComboLabel", True)
+        label.style().unpolish(label)
+        label.style().polish(label)
+        return label
+
+    def _style_filter_toggle(self, button):
+        button.setProperty("filterToggleButton", True)
+        font = button.font()
+        font.setFamily("Segoe UI")
+        font.setPointSize(10)
+        font.setBold(True)
+        button.setFont(font)
+        style_button(button, nav=True)
+
+    def _make_filter_toggle_button(self, parent, label):
+        button = QtWidgets.QToolButton(parent)
+        button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self._set_filter_toggle_state(button, False, label)
+        self._style_filter_toggle(button)
+        return button
+
     def _build_filters(self):
-        
-        self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", self.update_entry_width)
-        
-        self.search_entry = ctk.CTkEntry(
-            self.search_frame,
-            placeholder_text="Pesquisar...",
-            text_color="white",
-            justify="left",
-            textvariable=self.search_var,
-            width=30,
-            corner_radius=6,
-            border_color="#F5F2F2"
-        )
-        self.search_entry.pack(side="left", padx=(0, 6))
+        hero_shell = QtWidgets.QHBoxLayout()
+        hero_shell.setContentsMargins(0, 0, 0, 0)
+        hero_shell.setSpacing(18)
+        self.hero_layout.addLayout(hero_shell)
 
-        self.search_option = ctk.StringVar(value="Nota Fiscal")
-        self.search_combo = ctk.CTkComboBox(
-            self.search_frame,
-            values=["NF", "Fornecedor"],
-            variable=self.search_option,
-            state="readonly",
-            width=120,
-            justify='center',
-            corner_radius=6,
-            border_width=1
-        )
-        self.search_combo.pack(side="left", padx=(0, 6))
+        left_block = QtWidgets.QVBoxLayout()
+        left_block.setContentsMargins(0, 0, 0, 0)
+        left_block.setSpacing(0)
+        hero_shell.addLayout(left_block, 1)
 
-        self.btn_search = ctk.CTkButton(
-            self.search_frame,
-            text="Buscar",
-            command=self._search_notes,
-            width=80,
-            fg_color="#4989d3",
-            hover_color="#2b81e2"
-        )
-        self.btn_search.pack(side="left", padx=(0, 6))
+        title = make_label(self.hero_frame, "Dashboard do Estoque", anchor="w")
+        title.setProperty("appTitle", True)
+        title.style().unpolish(title)
+        title.style().polish(title)
+        left_block.addWidget(title)
+        left_block.addStretch(1)
 
-        self.btn_clear_search = ctk.CTkButton(
-            self.search_frame,
-            text="Limpar",
-            command=self.refresh_table,
-            width=80,
-            fg_color="#777777",
-            hover_color="#555555"
-        )
-        self.btn_clear_search.pack(side="left")
-        
-        make_label(self.left_frame, "Filtrar por:").pack(anchor="w", pady=(4, 6), padx=6)
+        right_panel = make_panel(self.hero_frame, "surface")
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(16, 14, 16, 14)
+        right_layout.setSpacing(10)
+        hero_shell.addWidget(right_panel, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
-        # estado dos painéis (inicialmente fechados)
+        self.scope_action_row = QtWidgets.QHBoxLayout()
+        self.scope_action_row.setContentsMargins(0, 0, 0, 0)
+        self.scope_action_row.setSpacing(10)
+        self.scope_badge = make_panel(right_panel, "scopeHighlight")
+        self.scope_badge.setProperty("kind", "scopeHighlight")
+        scope_layout = QtWidgets.QVBoxLayout(self.scope_badge)
+        scope_layout.setContentsMargins(18, 12, 18, 12)
+        scope_layout.setSpacing(0)
+        self.scope_badge_label = make_label(self.scope_badge, "Mes atual", anchor="center")
+        self.scope_badge_label.setProperty("scopeHeadline", True)
+        self.scope_badge_label.style().unpolish(self.scope_badge_label)
+        self.scope_badge_label.style().polish(self.scope_badge_label)
+        scope_layout.addWidget(self.scope_badge_label, 0, QtCore.Qt.AlignCenter)
+        self.scope_action_row.addWidget(self.scope_badge, 0, QtCore.Qt.AlignCenter)
+        right_layout.addLayout(self.scope_action_row)
+
+        self._build_search_menu()
+
+        self.search_frame.setVisible(False)
+
+        filter_header = make_label(self.left_frame, "Filtrar por:", anchor="center")
+        filter_header.setProperty("filterHeader", True)
+        filter_header.style().unpolish(filter_header)
+        filter_header.style().polish(filter_header)
+        self.left_layout.addWidget(filter_header, 0, QtCore.Qt.AlignCenter)
+
         self.cnpj_expanded = False
         self.adv_expanded = False
         self.data_expanded = False
-        
-        # --- Header toggle DATA ---
-        self.btn_toggle_data = ctk.CTkButton(
-            self.left_frame,
-            text="▶ Filtros de Datas",
-            anchor="w",
-            command=self.toggle_data_filters,
-            fg_color="#5ECC97",
-            hover_color="#6DEDAF",
-            corner_radius=6
-        )
-        self.btn_toggle_data.pack(fill="x", padx=6, pady=(4, 2))
+        self.data_filter_active = None
 
-        self.data_content_frame = ctk.CTkFrame(
-            self.left_frame,
-            fg_color="#2a2a2a",
-            border_color="#F5F2F2",
-            border_width=2,
-            corner_radius=8
-            )
-        
-        # ======== BLOCO: FILTRO POR DATA DE CHEGADA ========
-        make_label(self.data_content_frame, "Data de Chegada", font=("Segoe UI", 14, "bold")).pack(anchor="center", padx=6, pady=(8, 0))
+        self.data_panel = make_panel(self.left_frame, "surface")
+        data_panel_layout = QtWidgets.QVBoxLayout(self.data_panel)
+        data_panel_layout.setContentsMargins(10, 10, 10, 10)
+        data_panel_layout.setSpacing(8)
+        self.btn_toggle_data = self._make_filter_toggle_button(self.data_panel, "Datas")
+        self.btn_toggle_data.clicked.connect(self.toggle_data_filters)
+        data_panel_layout.addWidget(self.btn_toggle_data)
 
-        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(4, 0))
-        from tkcalendar import DateEntry
+        self.data_content_frame = QtWidgets.QFrame(self.data_panel)
+        self.data_content_frame.setVisible(False)
+        data_layout = QtWidgets.QVBoxLayout(self.data_content_frame)
+        data_layout.setContentsMargins(4, 0, 4, 4)
+        data_layout.setSpacing(7)
 
-        self.date_from = DateEntry(
-            self.data_content_frame,
-            date_pattern="dd/MM/yyyy",
-            width=12,
-            background="black",
-            foreground="white",
-            borderwidth=2,
-            year=datetime.now().year,
-            month=datetime.now().month,
-            day=datetime.now().day
-        )
-        self.date_from.pack(fill="x", padx=6, pady=4)
+        data_layout.addWidget(self._make_filter_section_label(self.data_content_frame, "Data de chegada"))
+        chegada_from_row = QtWidgets.QHBoxLayout()
+        chegada_from_row.setContentsMargins(0, 0, 0, 0)
+        chegada_from_row.setSpacing(8)
+        chegada_from_row.addWidget(self._make_filter_field_label(self.data_content_frame, "De"))
+        self.date_from = ClickableDateEdit(self.data_content_frame)
+        self.date_from.setProperty("filterDateField", True)
+        style_date_field(self.date_from, width=160, display_format="dd/MM/yyyy")
+        self.date_from.setDate(QtCore.QDate.currentDate())
+        chegada_from_row.addWidget(self.date_from)
+        data_layout.addLayout(chegada_from_row)
 
-        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(4, 0))
-        self.date_to = DateEntry(
-            self.data_content_frame,
-            date_pattern="dd/MM/yyyy",
-            width=12,
-            background="black",
-            foreground="white",
-            borderwidth=2,
-            year=datetime.now().year,
-            month=datetime.now().month,
-            day=datetime.now().day
-        )
-        self.date_to.pack(fill="x", padx=6, pady=4) 
-        
-        self.btn_apply_chegada = ctk.CTkButton(
-            self.data_content_frame,
-            text="Aplicar filtro",
-            command=lambda: self.apply_date_filter("chegada"),
-            fg_color="#4989d3",
-            hover_color="#2b81e2"
-        )
-        self.btn_apply_chegada.pack(fill="x", padx=6, pady=(6, 2))
+        chegada_to_row = QtWidgets.QHBoxLayout()
+        chegada_to_row.setContentsMargins(0, 0, 0, 0)
+        chegada_to_row.setSpacing(8)
+        chegada_to_row.addWidget(self._make_filter_field_label(self.data_content_frame, "Até"))
+        self.date_to = ClickableDateEdit(self.data_content_frame)
+        self.date_to.setProperty("filterDateField", True)
+        style_date_field(self.date_to, width=160, display_format="dd/MM/yyyy")
+        self.date_to.setDate(QtCore.QDate.currentDate())
+        chegada_to_row.addWidget(self.date_to)
+        data_layout.addLayout(chegada_to_row)
 
-        self.btn_clear_chegada = ctk.CTkButton(
-            self.data_content_frame,
-            text="Limpar filtro", 
-            command=lambda: self.clear_date_filter("chegada"),
-            fg_color="#777777",
-            hover_color="#555555"
-        )
-        self.btn_clear_chegada.pack(fill="x", padx=6, pady=(0, 10))
+        chegada_actions = QtWidgets.QHBoxLayout()
+        chegada_actions.setContentsMargins(0, 0, 0, 0)
+        chegada_actions.setSpacing(6)
+        self.btn_apply_chegada = QtWidgets.QPushButton("Aplicar", self.data_content_frame)
+        self.btn_apply_chegada.setFixedWidth(96)
+        style_button(self.btn_apply_chegada, accent=True)
+        self.btn_apply_chegada.clicked.connect(lambda: self.apply_date_filter("chegada"))
+        chegada_actions.addWidget(self.btn_apply_chegada)
+        self.btn_clear_chegada = QtWidgets.QPushButton("Limpar", self.data_content_frame)
+        self.btn_clear_chegada.setFixedWidth(96)
+        style_button(self.btn_clear_chegada, quiet=True)
+        self.btn_clear_chegada.clicked.connect(lambda: self.clear_date_filter("chegada"))
+        chegada_actions.addWidget(self.btn_clear_chegada)
+        data_layout.addLayout(chegada_actions)
 
-        make_label(self.data_content_frame, "Data de Conferência", font=("Segoe UI", 14, "bold")).pack(anchor="center", padx=6, pady=(10, 0))
+        data_layout.addSpacing(6)
+        data_layout.addWidget(self._make_filter_section_label(self.data_content_frame, "Conferência"))
+        conf_from_row = QtWidgets.QHBoxLayout()
+        conf_from_row.setContentsMargins(0, 0, 0, 0)
+        conf_from_row.setSpacing(8)
+        conf_from_row.addWidget(self._make_filter_field_label(self.data_content_frame, "De"))
+        self.date_conf_from = ClickableDateEdit(self.data_content_frame)
+        self.date_conf_from.setProperty("filterDateField", True)
+        style_date_field(self.date_conf_from, width=160, display_format="dd/MM/yyyy")
+        self.date_conf_from.setDate(QtCore.QDate.currentDate())
+        conf_from_row.addWidget(self.date_conf_from)
+        data_layout.addLayout(conf_from_row)
 
-        make_label(self.data_content_frame, "De:").pack(anchor="w", padx=6, pady=(4, 0))
-        self.date_conf_from = DateEntry(
-            self.data_content_frame,
-            date_pattern="dd/MM/yyyy",
-            width=12,
-            background="black",
-            foreground="white",
-            borderwidth=2,
-            year=datetime.now().year,
-            month=datetime.now().month,
-            day=datetime.now().day
-        )
-        self.date_conf_from.pack(fill="x", padx=6, pady=4)
+        conf_to_row = QtWidgets.QHBoxLayout()
+        conf_to_row.setContentsMargins(0, 0, 0, 0)
+        conf_to_row.setSpacing(8)
+        conf_to_row.addWidget(self._make_filter_field_label(self.data_content_frame, "Até"))
+        self.date_conf_to = ClickableDateEdit(self.data_content_frame)
+        self.date_conf_to.setProperty("filterDateField", True)
+        style_date_field(self.date_conf_to, width=160, display_format="dd/MM/yyyy")
+        self.date_conf_to.setDate(QtCore.QDate.currentDate())
+        conf_to_row.addWidget(self.date_conf_to)
+        data_layout.addLayout(conf_to_row)
 
-        make_label(self.data_content_frame, "Até:").pack(anchor="w", padx=6, pady=(4, 0))
-        self.date_conf_to = DateEntry(
-            self.data_content_frame,
-            date_pattern="dd/MM/yyyy",
-            width=12,
-            background="black",
-            foreground="white",
-            borderwidth=2,
-            year=datetime.now().year,
-            month=datetime.now().month,
-            day=datetime.now().day
-        )
-        self.date_conf_to.pack(fill="x", padx=6, pady=4)
+        conf_actions = QtWidgets.QHBoxLayout()
+        conf_actions.setContentsMargins(0, 0, 0, 0)
+        conf_actions.setSpacing(6)
+        self.btn_apply_conf = QtWidgets.QPushButton("Aplicar", self.data_content_frame)
+        self.btn_apply_conf.setFixedWidth(96)
+        style_button(self.btn_apply_conf, accent=True)
+        self.btn_apply_conf.clicked.connect(lambda: self.apply_date_filter("conferencia"))
+        conf_actions.addWidget(self.btn_apply_conf)
+        self.btn_clear_conf = QtWidgets.QPushButton("Limpar", self.data_content_frame)
+        self.btn_clear_conf.setFixedWidth(96)
+        style_button(self.btn_clear_conf, quiet=True)
+        self.btn_clear_conf.clicked.connect(lambda: self.clear_date_filter("conferencia"))
+        conf_actions.addWidget(self.btn_clear_conf)
+        data_layout.addLayout(conf_actions)
 
-        self.btn_apply_conf = ctk.CTkButton(
-            self.data_content_frame,
-            text="Aplicar filtro", # Conferencia
-            command=lambda: self.apply_date_filter("conferencia"),
-            fg_color="#4989d3",
-            hover_color="#2b81e2"
-        )
-        self.btn_apply_conf.pack(fill="x", padx=6, pady=(6, 2))
+        data_panel_layout.addWidget(self.data_content_frame)
+        self.left_layout.addWidget(self.data_panel)
 
-        self.btn_clear_conf = ctk.CTkButton(
-            self.data_content_frame,
-            text="Limpar filtro", # Conferencia
-            command=lambda: self.clear_date_filter("conferencia"),
-            fg_color="#777777",
-            hover_color="#555555"
-        )
-        self.btn_clear_conf.pack(fill="x", padx=6, pady=(0, 10))
-        
-        # --- Header toggle CNPJ ---
-        self.btn_toggle_cnpj = ctk.CTkButton(
-            self.left_frame,
-            text="▶ CNPJ (EH / MVA)",
-            anchor="w",
-            command=self.toggle_cnpj_filters,
-            fg_color="#5ECC97",
-            hover_color="#6DEDAF",
-            corner_radius=6
-        )
-        self.btn_toggle_cnpj.pack(fill="x", padx=6, pady=(4, 2))
+        self.cnpj_panel = make_panel(self.left_frame, "surface")
+        cnpj_panel_layout = QtWidgets.QVBoxLayout(self.cnpj_panel)
+        cnpj_panel_layout.setContentsMargins(10, 10, 10, 10)
+        cnpj_panel_layout.setSpacing(8)
+        self.btn_toggle_cnpj = self._make_filter_toggle_button(self.cnpj_panel, "CNPJ")
+        self.btn_toggle_cnpj.clicked.connect(self.toggle_cnpj_filters)
+        cnpj_panel_layout.addWidget(self.btn_toggle_cnpj)
 
-        # frame que contém os controles de CNPJ (checkboxes)
-        self.cnpj_content_frame = ctk.CTkFrame(
-            self.left_frame,
-            fg_color="#2a2a2a",
-            border_color="#F5F2F2",
-            border_width=2,
-            corner_radius=8
-        )
+        self.cnpj_content_frame = QtWidgets.QFrame(self.cnpj_panel)
+        self.cnpj_content_frame.setVisible(False)
+        cnpj_layout = QtWidgets.QVBoxLayout(self.cnpj_content_frame)
+        cnpj_layout.setContentsMargins(4, 0, 4, 4)
+        cnpj_layout.setSpacing(8)
 
-        # vars e checkboxes (parent é o cnpj_content_frame)
-        self.filter_vars = {"EH": tk.BooleanVar(value=True), "MVA": tk.BooleanVar(value=True)}
-        cb_eh = ctk.CTkCheckBox(
-            self.cnpj_content_frame,
-            text="Horizonte",
-            variable=self.filter_vars["EH"],
-            command=self.refresh_table,
-            text_color="white"
-        )
-        cb_mva = ctk.CTkCheckBox(
-            self.cnpj_content_frame,
-            text="MVA",
-            variable=self.filter_vars["MVA"],
-            command=self.refresh_table,
-            text_color="white"
-        )
-        cb_eh.pack(anchor="w", padx=6, pady=2)
-        cb_mva.pack(anchor="w", padx=6, pady=2)
+        self.filter_vars = {
+            "EH": QtWidgets.QCheckBox("Horizonte", self.cnpj_content_frame),
+            "MVA": QtWidgets.QCheckBox("MVA", self.cnpj_content_frame),
+        }
+        self.filter_vars["EH"].setChecked(True)
+        self.filter_vars["MVA"].setChecked(True)
+        self.filter_vars["EH"].stateChanged.connect(lambda *_: self.refresh_table())
+        self.filter_vars["MVA"].stateChanged.connect(lambda *_: self.refresh_table())
+        cnpj_row = QtWidgets.QHBoxLayout()
+        cnpj_row.setContentsMargins(0, 0, 0, 0)
+        cnpj_row.setSpacing(10)
+        cnpj_row.addWidget(self.filter_vars["EH"])
+        cnpj_row.addWidget(self.filter_vars["MVA"])
+        cnpj_layout.addLayout(cnpj_row)
+        cnpj_panel_layout.addWidget(self.cnpj_content_frame)
+        self.left_layout.addWidget(self.cnpj_panel)
 
-        # --- Header toggle filtros avançados ---
-        self.btn_toggle_adv = ctk.CTkButton(
-            self.left_frame,
-            text="▶ Filtros avançados",
-            anchor="w",
-            command=self.toggle_adv_filters,
-            fg_color="#5ECC97",
-            hover_color="#6DEDAF",
-            corner_radius=6
-        )
-        self.btn_toggle_adv.pack(fill="x", padx=6, pady=(4, 2))
+        self.adv_panel = make_panel(self.left_frame, "surface")
+        adv_panel_layout = QtWidgets.QVBoxLayout(self.adv_panel)
+        adv_panel_layout.setContentsMargins(10, 10, 10, 10)
+        adv_panel_layout.setSpacing(8)
+        self.btn_toggle_adv = self._make_filter_toggle_button(self.adv_panel, "Detalhes")
+        self.btn_toggle_adv.clicked.connect(self.toggle_adv_filters)
+        adv_panel_layout.addWidget(self.btn_toggle_adv)
 
-        # frame que contém os filtros avançados (fornecedor / conferente / status)
-        self.adv_content_frame = ctk.CTkFrame(
-            self.left_frame,
-            fg_color="#2a2a2a",
-            border_color="#F5F2F2",
-            border_width=2,
-            corner_radius=8
-        )
+        self.adv_content_frame = QtWidgets.QFrame(self.adv_panel)
+        self.adv_content_frame.setVisible(False)
+        adv_layout = QtWidgets.QVBoxLayout(self.adv_content_frame)
+        adv_layout.setContentsMargins(4, 0, 4, 4)
+        adv_layout.setSpacing(8)
 
+        adv_layout.addWidget(self._make_filter_combo_label(self.adv_content_frame, "Fornecedor"))
+        self.filter_fornecedor_cb = QtWidgets.QComboBox(self.adv_content_frame)
+        self.filter_fornecedor_cb.addItems(["Todas"] + self._supplier_names())
+        style_combo_field(self.filter_fornecedor_cb, center=True)
+        self.filter_fornecedor_cb.currentTextChanged.connect(lambda *_: self.refresh_table())
+        adv_layout.addWidget(self.filter_fornecedor_cb)
 
-        # Fornecedor
-        make_label(self.adv_content_frame, "Fornecedor:").pack(anchor="w", padx=4, pady=(6, 0))
-        self.filter_fornecedor_var = ctk.StringVar(value="Todas")
-        self.filter_fornecedor_cb = ctk.CTkComboBox(
-            self.adv_content_frame,
-            values=["Todas"] + self._supplier_names(),
-            variable=self.filter_fornecedor_var,
-            state="readonly",
-            justify="center"
-        )
-        self.filter_fornecedor_cb.pack(fill="x", padx=6, pady=4)
+        adv_layout.addWidget(self._make_filter_combo_label(self.adv_content_frame, "Recebido por"))
+        self.filter_recebido_cb = QtWidgets.QComboBox(self.adv_content_frame)
+        self.filter_recebido_cb.addItems(["Todos"] + self._conferente_names())
+        style_combo_field(self.filter_recebido_cb, center=True)
+        self.filter_recebido_cb.currentTextChanged.connect(lambda *_: self.refresh_table())
+        adv_layout.addWidget(self.filter_recebido_cb)
 
-        # Conferente
-        make_label(self.adv_content_frame, "Conferente:").pack(anchor="w", padx=4, pady=(4, 0))
-        self.filter_conferente_var = ctk.StringVar(value="Todos")
-        self.filter_conferente_cb = ctk.CTkComboBox(
-            self.adv_content_frame,
-            values=["Todos"] + self._conferente_names(),
-            variable=self.filter_conferente_var,
-            state="readonly",
-            justify="center"
-        )
-        self.filter_conferente_cb.pack(fill="x", padx=6, pady=4)
+        adv_layout.addWidget(self._make_filter_combo_label(self.adv_content_frame, "Conferido por"))
+        self.filter_conferido_por_cb = QtWidgets.QComboBox(self.adv_content_frame)
+        self.filter_conferido_por_cb.addItems(["Todos"] + self._conferente_names())
+        style_combo_field(self.filter_conferido_por_cb, center=True)
+        self.filter_conferido_por_cb.currentTextChanged.connect(lambda *_: self.refresh_table())
+        adv_layout.addWidget(self.filter_conferido_por_cb)
 
-        # Status conferência
-        make_label(self.adv_content_frame, "Status conferência:").pack(anchor="w", padx=4, pady=(4, 0))
-        self.filter_conferido_var = tk.StringVar(value="Todas")
-        self.combo_filtro_conferido = ctk.CTkComboBox(
-            self.adv_content_frame,
-            values=["Todas", "Notas conferidas", "Notas não conferidas"],
-            variable=self.filter_conferido_var,
-            state="readonly",
-            justify="center"
-        )
-        self.combo_filtro_conferido.pack(pady=4, padx=6, fill="x")
+        adv_layout.addWidget(self._make_filter_combo_label(self.adv_content_frame, "Status da conferência"))
+        self.combo_filtro_conferido = QtWidgets.QComboBox(self.adv_content_frame)
+        self.combo_filtro_conferido.addItems(["Todas", "Notas conferidas", "Notas nao conferidas"])
+        style_combo_field(self.combo_filtro_conferido, center=True)
+        self.combo_filtro_conferido.currentTextChanged.connect(lambda *_: self.refresh_table())
+        adv_layout.addWidget(self.combo_filtro_conferido)
 
-        # Frame dos botões Aplicar / Limpar
-        self.frame_filters = ctk.CTkFrame(self.left_frame)
-        self.btn_apply_filters = ctk.CTkButton(
-            self.frame_filters,
-            text="Aplicar filtros",
-            command=self.refresh_table,
-            hover_color="#2b81e2",
-            fg_color="#4989d3"
-        )
-        self.btn_clear_filters = ctk.CTkButton(
-            self.frame_filters,
-            text="Limpar filtros",
-            command=self._clear_filters,
-            hover_color="#2b81e2",
-            fg_color="#4989d3"
-        )
-        # não dar pack ainda; só quando o painel for expandido
-        if self.btn_apply_filters:
-            self.btn_apply_filters.pack(expand=True, fill="x", pady=4)
-            self.btn_clear_filters.pack(expand=True, fill="x", pady=4)
+        adv_panel_layout.addWidget(self.adv_content_frame)
+        self.left_layout.addWidget(self.adv_panel)
 
-        # --- quick actions (mantém a hierarquia / ordem original) ---
-        ctk.CTkButton(self.left_frame, text="Adicionar Nota", command=self.show_add_form).pack(pady=(12, 6), padx=6, fill="x")
-        ctk.CTkButton(self.left_frame, text="Gerenciar Fornecedores", command=self.show_manage_suppliers).pack(pady=6, padx=6, fill="x")
-        ctk.CTkButton(self.left_frame, text="Gerenciar Conferentes", command=self.show_manage_conferentes).pack(pady=6, padx=6, fill="x")
+        self.frame_filters = make_panel(self.left_frame, "surface")
+        frame_filters_layout = QtWidgets.QVBoxLayout(self.frame_filters)
+        frame_filters_layout.setContentsMargins(10, 10, 10, 10)
+        frame_filters_layout.setSpacing(8)
+
+        self.btn_apply_filters = QtWidgets.QPushButton("Aplicar filtros", self.frame_filters)
+        style_button(self.btn_apply_filters, accent=True)
+        self.btn_apply_filters.clicked.connect(self.refresh_table)
+        frame_filters_layout.addWidget(self.btn_apply_filters)
+        self.btn_apply_filters.setVisible(False)
+
+        self.btn_clear_filters = QtWidgets.QPushButton("Limpar filtros", self.frame_filters)
+        style_button(self.btn_clear_filters, quiet=True)
+        self.btn_clear_filters.clicked.connect(self._clear_filters)
+        frame_filters_layout.addWidget(self.btn_clear_filters)
+
+        self.frame_filters.setVisible(True)
+        self.left_layout.addWidget(self.frame_filters)
+
+        self.left_layout.addStretch(1)
+        self._refresh_scope_badge()
+
+    def _build_search_menu(self):
+        self.search_popup = QtWidgets.QFrame(self, QtCore.Qt.Popup | QtCore.Qt.FramelessWindowHint)
+        self.search_popup.setObjectName("searchPopup")
+        self.search_popup.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        popup_layout = QtWidgets.QVBoxLayout(self.search_popup)
+        popup_layout.setContentsMargins(0, 0, 0, 0)
+        popup_layout.setSpacing(0)
+
+        search_cluster = make_panel(self.search_popup, "surface")
+        search_cluster.setMinimumWidth(318)
+        search_cluster.setMaximumWidth(318)
+        search_cluster_layout = QtWidgets.QVBoxLayout(search_cluster)
+        search_cluster_layout.setContentsMargins(16, 16, 16, 16)
+        search_cluster_layout.setSpacing(8)
+
+        menu_title = make_label(search_cluster, "Busca", font=("Segoe UI", 13, "bold"), anchor="center")
+        search_cluster_layout.addWidget(menu_title, 0, QtCore.Qt.AlignCenter)
+
+        menu_hint = make_label(
+            search_cluster,
+            "Escolha o tipo de busca e digite o valor para filtrar rapidamente.",
+            muted=True,
+            anchor="center",
+        )
+        menu_hint.setWordWrap(True)
+        search_cluster_layout.addWidget(menu_hint)
+
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(8)
+
+        self.search_mode_nf = QtWidgets.QPushButton("NF", search_cluster)
+        self.search_mode_nf.setObjectName("searchModeButton")
+        self.search_mode_nf.setCheckable(True)
+        self.search_mode_nf.setChecked(True)
+        self.search_mode_nf.setFixedWidth(88)
+        style_button(self.search_mode_nf)
+        self.search_mode_nf.clicked.connect(lambda: self._set_search_mode("NF"))
+        mode_row.addWidget(self.search_mode_nf)
+
+        self.search_mode_supplier = QtWidgets.QPushButton("Fornecedor", search_cluster)
+        self.search_mode_supplier.setObjectName("searchModeButton")
+        self.search_mode_supplier.setCheckable(True)
+        self.search_mode_supplier.setFixedWidth(118)
+        style_button(self.search_mode_supplier)
+        self.search_mode_supplier.clicked.connect(lambda: self._set_search_mode("Fornecedor"))
+        mode_row.addWidget(self.search_mode_supplier)
+
+        search_cluster_layout.addLayout(mode_row)
+
+        self.search_entry = QtWidgets.QLineEdit(search_cluster)
+        self.search_entry.setPlaceholderText("Procure NF...")
+        self.search_entry.setMaxLength(20)
+        style_text_field(self.search_entry, center=True, width=220)
+        self.search_entry.textChanged.connect(self._sanitize_search_text)
+        self.search_entry.returnPressed.connect(self._search_notes_and_close)
+        search_cluster_layout.addWidget(self.search_entry, 0, QtCore.Qt.AlignCenter)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(8)
+        self.btn_search = QtWidgets.QPushButton("Buscar", search_cluster)
+        style_button(self.btn_search, accent=True)
+        self.btn_search.setFixedWidth(84)
+        self.btn_search.clicked.connect(self._search_notes_and_close)
+        button_row.addWidget(self.btn_search)
+
+        self.btn_clear_search = QtWidgets.QPushButton("Limpar", search_cluster)
+        style_button(self.btn_clear_search, quiet=True)
+        self.btn_clear_search.setFixedWidth(76)
+        self.btn_clear_search.clicked.connect(self._clear_search_and_close)
+        button_row.addWidget(self.btn_clear_search)
+        search_cluster_layout.addLayout(button_row)
+
+        self._set_search_mode("NF")
+
+        popup_layout.addWidget(search_cluster)
+        self.search_menu = self.search_popup
+
+    def _show_search_menu(self):
+        if not hasattr(self, "search_popup") or not hasattr(self, "btn_toggle_search"):
+            return
+
+        if self.search_popup.isVisible():
+            self.search_popup.close()
+            return
+
+        self.search_popup.ensurePolished()
+        self.search_popup.adjustSize()
+        popup_size = self.search_popup.sizeHint()
+        anchor = self.btn_toggle_search
+        anchor_bottom_right = anchor.mapToGlobal(QtCore.QPoint(anchor.width(), anchor.height()))
+        x = anchor_bottom_right.x() - popup_size.width()
+        y = anchor_bottom_right.y() + 10
+
+        screen = QtGui.QGuiApplication.screenAt(anchor_bottom_right)
+        if screen:
+            available = screen.availableGeometry()
+            x = max(available.left() + 8, min(x, available.right() - popup_size.width() - 8))
+            y = max(available.top() + 8, min(y, available.bottom() - popup_size.height() - 8))
+
+        self.search_popup.move(QtCore.QPoint(x, y))
+        self.search_popup.show()
+        self.search_popup.raise_()
+        QtCore.QTimer.singleShot(0, self.search_entry.setFocus)
+
+    def _set_search_mode(self, mode):
+        nf_mode = mode == "NF"
+        self.search_mode_nf.setChecked(nf_mode)
+        self.search_mode_supplier.setChecked(not nf_mode)
+        self.search_entry.clear()
+        self.search_entry.setPlaceholderText("Procure NF..." if nf_mode else "Procure fornecedor...")
+        self.search_entry.setMaxLength(20)
+        if nf_mode:
+            self.search_entry.setValidator(QtGui.QRegularExpressionValidator(QtCore.QRegularExpression(r"\d*"), self.search_entry))
+        else:
+            self.search_entry.setValidator(None)
+        if hasattr(self, "search_model"):
+            self.search_model.setStringList([])
+        self.update_entry_width()
+
+    def _sanitize_search_text(self, text):
+        if not hasattr(self, "search_entry"):
+            return
+
+        if self._current_search_mode() == "NF":
+            sanitized = "".join(ch for ch in text if ch.isdigit())[:20]
+        else:
+            sanitized = text[:20]
+
+        if sanitized != text:
+            cursor_pos = min(len(sanitized), self.search_entry.cursorPosition())
+            self.search_entry.blockSignals(True)
+            self.search_entry.setText(sanitized)
+            self.search_entry.setCursorPosition(cursor_pos)
+            self.search_entry.blockSignals(False)
+
+    def _search_notes_and_close(self):
+        self._search_notes()
+        if hasattr(self, "search_popup"):
+            self.search_popup.close()
+
+    def _clear_search_and_close(self):
+        self.search_entry.clear()
+        self.refresh_table()
+        if hasattr(self, "search_popup"):
+            self.search_popup.close()
 
     def _apply_filters(self, notes):
-        """Aplica todos os filtros (CNPJ, datas, avançados)."""
-        enabled_cnpjs = [k for k, v in self.filter_vars.items() if v.get()]
-        filtro_fornecedor = self.filter_fornecedor_var.get()
-        filtro_conferente = self.filter_conferente_var.get()
-        filtro_conferido = self.filter_conferido_var.get()
+        enabled_cnpjs = [k for k, v in self.filter_vars.items() if v.isChecked()]
+        filtro_fornecedor = self.filter_fornecedor_cb.currentText()
+        filtro_conferido = self.combo_filtro_conferido.currentText()
 
-        # Filtro de Data
-        if self.data_expanded and hasattr(self, "data_filter_active"):
+        if self.data_expanded and self.data_filter_active:
             try:
                 if self.data_filter_active == "chegada":
-                    date_from = self.date_from.get_date()
-                    date_to = self.date_to.get_date()
+                    date_from = self._qdate_to_date(self.date_from.date())
+                    date_to = self._qdate_to_date(self.date_to.date())
                     notes = [
-                        n for n in notes
+                        n
+                        for n in notes
                         if n.get("data_chegada")
                         and date_from <= datetime.strptime(n["data_chegada"], "%d-%m-%Y").date() <= date_to
                     ]
                 elif self.data_filter_active == "conferencia":
-                    date_from = self.date_conf_from.get_date()
-                    date_to = self.date_conf_to.get_date()
+                    date_from = self._qdate_to_date(self.date_conf_from.date())
+                    date_to = self._qdate_to_date(self.date_conf_to.date())
                     notes = [
-                        n for n in notes
+                        n
+                        for n in notes
                         if n.get("conferido_em")
                         and date_from <= datetime.strptime(n["conferido_em"], "%d-%m-%Y").date() <= date_to
                     ]
             except Exception as e:
                 print("Erro ao filtrar por data:", e)
 
-        # Filtro de CNPJs
         notes = [n for n in notes if n.get("cnpj") in enabled_cnpjs]
 
-        # Filtro de fornecedor
         if filtro_fornecedor and filtro_fornecedor != "Todas":
             notes = [n for n in notes if n.get("fornecedor_name") == filtro_fornecedor]
 
-        # Filtro de conferente
-        if filtro_conferente and filtro_conferente != "Todos":
-            notes = [n for n in notes if n.get("conferente_name") == filtro_conferente]
+        filtro_recebido = self.filter_recebido_cb.currentText()
+        if filtro_recebido and filtro_recebido != "Todos":
+            notes = [
+                n
+                for n in notes
+                if (n.get("recebido_por") or n.get("conferente_name")) == filtro_recebido
+            ]
 
-        # Filtro de conferência
+        filtro_conferido_por = self.filter_conferido_por_cb.currentText()
+        if filtro_conferido_por and filtro_conferido_por != "Todos":
+            notes = [n for n in notes if n.get("conferido_por") == filtro_conferido_por]
+
         if filtro_conferido == "Notas conferidas":
             notes = [n for n in notes if n.get("conferido", False)]
-        elif filtro_conferido == "Notas não conferidas":
+        elif filtro_conferido == "Notas nao conferidas":
             notes = [n for n in notes if not n.get("conferido", False)]
 
         return notes
 
     def toggle_cnpj_filters(self):
-        """Mostra/oculta o painel de CNPJ (EH / MVA)."""
-        if self.cnpj_expanded:
-            self.cnpj_content_frame.pack_forget()
-            self.btn_toggle_cnpj.configure(text="▶ CNPJ (EH / MVA)")
-            self.cnpj_expanded = False
-        else:
-            self.cnpj_content_frame.pack(fill="x", padx=6, pady=(2, 4))
-            self.btn_toggle_cnpj.configure(text="▼ CNPJ (EH / MVA)")
-            self.cnpj_expanded = True
+        self.cnpj_expanded = not self.cnpj_expanded
+        self.cnpj_content_frame.setVisible(self.cnpj_expanded)
+        self._set_filter_toggle_state(self.btn_toggle_cnpj, self.cnpj_expanded, "CNPJ")
+        self._update_filter_buttons()
 
     def toggle_adv_filters(self):
-        """Mostra/oculta o painel de filtros avançados e os botões Aplicar/Limpar."""
-        if self.adv_expanded:
-            self.adv_content_frame.pack_forget()
-            self.btn_toggle_adv.configure(text="▶ Filtros avançados")
-            self.adv_expanded = False
-        else:
-            self.adv_content_frame.pack(fill="x", padx=6, pady=(2, 4))
-            self.btn_toggle_adv.configure(text="▼ Filtros avançados")
-            self.adv_expanded = True
+        self.adv_expanded = not self.adv_expanded
+        self.adv_content_frame.setVisible(self.adv_expanded)
+        self._set_filter_toggle_state(self.btn_toggle_adv, self.adv_expanded, "Detalhes")
         self._update_filter_buttons()
 
     def toggle_data_filters(self):
-        """Mostra/oculta o painel de Filtros de Datas."""
-        if self.data_expanded:
-            self.data_content_frame.pack_forget()
-            self.btn_toggle_data.configure(text="▶ Filtros de Datas")
-            self.data_expanded = False
-        else:
-            self.data_content_frame.pack(fill="x", padx=6, pady=(2, 4))
-            self.btn_toggle_data.configure(text="▼ Filtros de Datas")
-            self.data_expanded = True
+        self.data_expanded = not self.data_expanded
+        self.data_content_frame.setVisible(self.data_expanded)
+        self._set_filter_toggle_state(self.btn_toggle_data, self.data_expanded, "Datas")
+        self._update_filter_buttons()
 
     def _update_filter_buttons(self):
-        """Controla quando mostrar os botões Aplicar/Limpar filtros."""
-        if self.adv_expanded or self.data_expanded:
-            self.frame_filters.pack(fill="x", padx=6, pady=(6, 4))
-        else:
-            self.frame_filters.pack_forget()
-
-
-        if not hasattr(self, "suggestion_box"):
-            return
-        selection = self.suggestion_box.curselection()
-        if selection:
-            valor = self.suggestion_box.get(selection[0])
-            self.search_entry.delete(0, "end")
-            self.search_entry.insert(0, valor)
-            self.suggestion_box.destroy()
-            self._search_notes()
+        self.frame_filters.setVisible(True)
 
     def apply_date_filter(self, tipo):
-        """Ativa um tipo de filtro de data e desativa o outro."""
         if tipo == "chegada":
-            # aplica filtro de chegada
             self.data_filter_active = "chegada"
-            self.btn_apply_conf.configure(state="disabled", text_color="red", fg_color="#555555")
-            self.btn_clear_conf.configure(state="disabled", text_color="red", fg_color="#555555")
+            self.btn_apply_conf.setEnabled(False)
+            self.btn_clear_conf.setEnabled(False)
         else:
-            # aplica filtro de conferência
             self.data_filter_active = "conferencia"
-            self.btn_apply_chegada.configure(state="disabled", text_color="red", fg_color="#555555")
-            self.btn_clear_chegada.configure(state="disabled", text_color="red", fg_color="#555555")
+            self.btn_apply_chegada.setEnabled(False)
+            self.btn_clear_chegada.setEnabled(False)
 
         self.refresh_table()
 
     def clear_date_filter(self, tipo):
-        """Limpa o filtro de data ativo e reativa os botões do outro."""
-        if hasattr(self, "data_filter_active") and self.data_filter_active == tipo:
+        if self.data_filter_active == tipo:
             self.data_filter_active = None
 
-        # reativa ambos
-        self.btn_apply_chegada.configure(state="normal", text_color="white", fg_color="#4989d3")
-        self.btn_clear_chegada.configure(state="normal", text_color="white", fg_color="#777777")
-        self.btn_apply_conf.configure(state="normal", text_color="white", fg_color="#4989d3")
-        self.btn_clear_conf.configure(state="normal", text_color="white", fg_color="#777777")
-
+        self.btn_apply_chegada.setEnabled(True)
+        self.btn_clear_chegada.setEnabled(True)
+        self.btn_apply_conf.setEnabled(True)
+        self.btn_clear_conf.setEnabled(True)
         self.refresh_table()
+
+    def _refresh_scope_badge(self):
+        if not hasattr(self, "scope_badge_label"):
+            return
+
+        if self.settings.get("visualizar_todos_meses", False):
+            self.scope_badge_label.setText("Historico anual")
+        else:
+            self.scope_badge_label.setText("Mes atual")
+
+    def _update_toolbar_summary(self, total, conferidas):
+        self._refresh_scope_badge()
+        escopo = "Hist\u00f3rico anual" if self.settings.get("visualizar_todos_meses", False) else datetime.now().strftime("%m/%Y")
+        if hasattr(self, "operational_visible_value"):
+            self.operational_visible_value.setText(str(total))
+        if hasattr(self, "operational_done_value"):
+            self.operational_done_value.setText(str(conferidas))
+        if hasattr(self, "operational_scope_value"):
+            self.operational_scope_value.setText(escopo)
 
     def warning_month_filter(self):
         if not self.settings.get("visualizar_todos_meses", False):
-            import locale, threading  
-            locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
-            def show_warning():
-                messagebox.showinfo(
-                "Aviso",
-                f"Dados filtrados do mês de {datetime.now().strftime('%B').capitalize()}/{datetime.now().year}.\n"
-                "Para visualizar todos os meses, acesse as Configurações."
-                )
-            threading.Thread(target=show_warning).start()
-        else:
+            Toast(
+                self,
+                f"Exibindo apenas o M\u00eas Atual ({datetime.now().strftime('%m/%Y')}). Ajuste isso em Preferencias.",
+                timeout_ms=5600,
+            )
+
+    def _handle_autocomplete(self):
+        termo = self.search_entry.text().strip().lower()
+        if not termo:
             return
-    
+
+        filtro_tipo = self._current_search_mode()
+        notes = load_notes()
+        notes = self._apply_filters(notes)
+
+        if filtro_tipo in ("NF", "Nota Fiscal"):
+            valores = [str(n.get("nf_number", "")) for n in notes]
+        elif filtro_tipo == "Fornecedor":
+            valores = [str(n.get("fornecedor_name", "")) for n in notes]
+        else:
+            valores = []
+
+        sugestao = next((v for v in valores if v.lower().startswith(termo)), None)
+        if sugestao:
+            self.search_entry.setText(sugestao)
+
     def _clear_filters(self):
-        self.filter_vars["EH"].set(True)
-        self.filter_vars["MVA"].set(True)
-        self.filter_fornecedor_var.set("Todas")
-        self.filter_conferente_var.set("Todos")
-        self.filter_conferido_var.set("Todas")
+        self.filter_vars["EH"].setChecked(True)
+        self.filter_vars["MVA"].setChecked(True)
+        self.filter_fornecedor_cb.setCurrentText("Todas")
+        self.filter_recebido_cb.setCurrentText("Todos")
+        self.filter_conferido_por_cb.setCurrentText("Todos")
+        self.combo_filtro_conferido.setCurrentText("Todas")
+        self.data_filter_active = None
+        self.date_from.setDate(QtCore.QDate.currentDate())
+        self.date_to.setDate(QtCore.QDate.currentDate())
+        self.date_conf_from.setDate(QtCore.QDate.currentDate())
+        self.date_conf_to.setDate(QtCore.QDate.currentDate())
+        self.btn_apply_chegada.setEnabled(True)
+        self.btn_clear_chegada.setEnabled(True)
+        self.btn_apply_conf.setEnabled(True)
+        self.btn_clear_conf.setEnabled(True)
         self.refresh_table()
-   
+
+    @staticmethod
+    def _qdate_to_date(qdate):
+        return datetime(qdate.year(), qdate.month(), qdate.day()).date()
