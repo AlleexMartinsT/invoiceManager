@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import traceback
 from datetime import datetime
 from supabase import create_client
 import uuid
@@ -113,6 +114,81 @@ def save_all_notes(notes: list[dict]):
 def today_br():
     return datetime.now().strftime("%d-%m-%Y")
 
+def app_data_dir():
+    appdata = os.getenv("APPDATA") or os.path.expanduser("~")
+    cfg_dir = os.path.join(appdata, "RelatorioEstoque")
+    os.makedirs(cfg_dir, exist_ok=True)
+    return cfg_dir
+
+def runtime_log_path():
+    return os.path.join(app_data_dir(), "app.log")
+
+def log_exception(context, exc=None, exc_info=None):
+    if exc_info is None:
+        exc_info = sys.exc_info()
+
+    lines = [
+        "",
+        "=" * 80,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        str(context),
+    ]
+
+    if exc_info and exc_info[0]:
+        lines.extend(traceback.format_exception(*exc_info))
+    elif exc is not None:
+        lines.append(repr(exc))
+
+    with open(runtime_log_path(), "a", encoding="utf-8") as file:
+        file.write("\n".join(lines).rstrip() + "\n")
+
+def install_global_exception_hook():
+    if getattr(sys, "_estoque_exception_hook_installed", False):
+        return
+
+    def show_error_message():
+        try:
+            from PySide6 import QtWidgets
+
+            app = QtWidgets.QApplication.instance()
+            parent = app.activeWindow() if app else None
+            QtWidgets.QMessageBox.critical(
+                parent,
+                "Erro inesperado",
+                "O aplicativo encontrou um erro inesperado. "
+                f"O detalhe foi salvo em:\n{runtime_log_path()}",
+            )
+        except Exception:
+            pass
+
+    def handle_exception(exc_type, exc_value, exc_tb):
+        log_exception("Unhandled exception", exc_value, (exc_type, exc_value, exc_tb))
+        try:
+            from PySide6 import QtCore, QtWidgets
+
+            if QtWidgets.QApplication.instance():
+                QtCore.QTimer.singleShot(0, show_error_message)
+        except Exception:
+            pass
+
+    sys.excepthook = handle_exception
+
+    try:
+        import threading
+
+        def handle_thread_exception(args):
+            log_exception(
+                f"Unhandled thread exception: {getattr(args.thread, 'name', 'thread')}",
+                args.exc_value,
+                (args.exc_type, args.exc_value, args.exc_traceback),
+            )
+
+        threading.excepthook = handle_thread_exception
+    except Exception:
+        pass
+
+    sys._estoque_exception_hook_installed = True
+
 def resource_path(relative_path: str):
     """Garante que os assets funcionem no PyInstaller"""
     try:
@@ -196,10 +272,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ---------------- Settings ----------------
 
 def settings_path():
-    appdata = os.getenv("APPDATA") or os.path.expanduser("~")
-    cfg_dir = os.path.join(appdata, "RelatorioEstoque")
-    os.makedirs(cfg_dir, exist_ok=True)
-    return os.path.join(cfg_dir, "settings.json")
+    return os.path.join(app_data_dir(), "settings.json")
 
 def load_settings():
     path = settings_path()

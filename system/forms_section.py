@@ -88,65 +88,76 @@ class FormsMixin:
         return dialog
 
     def on_add_ok(self):
-        nf = self.entry_nf.text().strip()
-        nf = str(nf).lstrip("0")
-
-        if not nf:
-            QtWidgets.QMessageBox.warning(self, "Aviso", "Preencha o campo NF.")
-            return
-
-        fornecedor = self.combobox_supplier.currentText().strip()
-        conferente = self.combo_conferente.currentText().strip()
-
-        if not fornecedor or not conferente:
-            QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione fornecedor e conferente.")
-            return
-
-        data_chegada = self.entry_date.date().toString("dd-MM-yyyy")
-        data_emissao = self.entry_date_emissao.date().toString("dd-MM-yyyy")
-
         try:
-            datetime.strptime(data_chegada, "%d-%m-%Y")
-        except Exception:
-            QtWidgets.QMessageBox.warning(self, "Aviso", "Data inv\u00e1lida. Use DD-MM-YYYY.")
-            return
+            nf = self.entry_nf.text().strip()
+            nf = str(nf).lstrip("0")
 
-        cnpj = (self.combo_cnpj.currentData() or self.combo_cnpj.currentText()).strip()
+            if not nf:
+                QtWidgets.QMessageBox.warning(self, "Aviso", "Preencha o campo NF.")
+                return
 
-        suppliers = utils.load_suppliers()
-        supplier = next((x for x in suppliers if x["name"] == fornecedor), {"id": None, "name": fornecedor})
-        conferentes = utils.load_conferentes()
-        conferente_data = next((x for x in conferentes if x["name"] == conferente), {"id": None, "name": conferente})
+            fornecedor = self.combobox_supplier.currentText().strip()
+            conferente = self.combo_conferente.currentText().strip()
 
-        note = {
-            "nf_number": nf,
-            "fornecedor_id": supplier.get("id"),
-            "fornecedor_name": supplier.get("name"),
-            "data_chegada": data_chegada,
-            "data_emissao": data_emissao,
-            "cnpj": cnpj,
-            "conferente_id": conferente_data.get("id"),
-            "conferente_name": conferente_data.get("name"),
-            "recebido_por": conferente_data.get("name"),
-            "created_at": datetime.now().isoformat(),
-            "conferido": False,
-            "conferido_por": None,
-            "conferido_em": None,
-            "modified_by": self.user.get("name") if self.user else None,
-        }
+            if not fornecedor or not conferente:
+                QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione fornecedor e conferente.")
+                return
 
-        notes = utils.load_notes()
-        nf_number = nf.strip()
-        if any(n.get("nf_number") == nf_number for n in notes):
-            QtWidgets.QMessageBox.warning(self, "Duplicado", f"A nota {nf_number} j\u00e1 existe!")
-            return
+            data_chegada = self.entry_date.date().toString("dd-MM-yyyy")
+            data_emissao = self.entry_date_emissao.date().toString("dd-MM-yyyy")
 
-        utils.save_note(note)
-        self.refresh_table()
-        QtWidgets.QMessageBox.information(self, "Sucesso", "Nota salva com sucesso.")
-        Toast(self, f"Nota {note.get('nf_number')} adicionada por {self.user.get('name', 'Desconhecido')}")
-        if not self._close_add_form_window():
-            self.show_page("home")
+            try:
+                datetime.strptime(data_chegada, "%d-%m-%Y")
+                datetime.strptime(data_emissao, "%d-%m-%Y")
+            except Exception:
+                QtWidgets.QMessageBox.warning(self, "Aviso", "Data invalida. Use DD-MM-YYYY.")
+                return
+
+            cnpj = (self.combo_cnpj.currentData() or self.combo_cnpj.currentText()).strip()
+
+            suppliers = utils.load_suppliers()
+            supplier = next((x for x in suppliers if x["name"] == fornecedor), {"id": None, "name": fornecedor})
+            conferentes = utils.load_conferentes()
+            conferente_data = next((x for x in conferentes if x["name"] == conferente), {"id": None, "name": conferente})
+            user_name = self.user.get("name") if isinstance(self.user, dict) else "Desconhecido"
+
+            note = {
+                "nf_number": nf,
+                "fornecedor_id": supplier.get("id"),
+                "fornecedor_name": supplier.get("name"),
+                "data_chegada": data_chegada,
+                "data_emissao": data_emissao,
+                "cnpj": cnpj,
+                "conferente_id": conferente_data.get("id"),
+                "conferente_name": conferente_data.get("name"),
+                "recebido_por": conferente_data.get("name"),
+                "created_at": datetime.now().isoformat(),
+                "conferido": False,
+                "conferido_por": None,
+                "conferido_em": None,
+                "modified_by": user_name if user_name != "Desconhecido" else None,
+            }
+
+            notes = utils.load_notes()
+            nf_number = nf.strip()
+            if any(str(n.get("nf_number")) == nf_number for n in notes):
+                QtWidgets.QMessageBox.warning(self, "Duplicado", f"A nota {nf_number} ja existe!")
+                return
+
+            utils.save_note(note)
+            self.refresh_table()
+            QtWidgets.QMessageBox.information(self, "Sucesso", "Nota salva com sucesso.")
+            Toast(self, f"Nota {note.get('nf_number')} adicionada por {user_name}")
+            if not self._close_add_form_window():
+                self.show_page("home")
+        except Exception as exc:
+            utils.log_exception("Falha ao criar nota fiscal", exc)
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Erro ao criar nota",
+                "Nao foi possivel salvar a nota. "
+                f"O detalhe foi salvo em:\n{utils.runtime_log_path()}",
+            )
 
     def action_close_form(self):
         if not self.settings.get("ask_on_close", True):

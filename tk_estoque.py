@@ -32,6 +32,7 @@ class EstoqueApp(
 ):
     def __init__(self):
         super().__init__()
+        utils.install_global_exception_hook()
         self._install_app_font()
         install_messagebox_tweaks()
         self.root = self
@@ -778,6 +779,7 @@ class EstoqueApp(
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
+    utils.install_global_exception_hook()
     window = EstoqueApp()
     utils.check_for_updates(window)
     window.showMaximized()

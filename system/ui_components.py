@@ -458,18 +458,69 @@ def install_messagebox_tweaks():
     if getattr(QtWidgets.QMessageBox, "_estoque_tweaked", False):
         return
 
-    def information(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+    messagebox_style = (
+        "QMessageBox {"
+        "background: #0B1728;"
+        "color: #F8FAFC;"
+        "}"
+        "QMessageBox QLabel {"
+        "color: #F8FAFC;"
+        "font-size: 13px;"
+        "font-weight: 600;"
+        "background: transparent;"
+        "}"
+        "QMessageBox QPushButton {"
+        "background: rgba(255, 255, 255, 0.08);"
+        "color: #F8FAFC;"
+        "border: 1px solid rgba(255, 255, 255, 28);"
+        "border-radius: 12px;"
+        "padding: 8px 16px;"
+        "min-width: 82px;"
+        "font-weight: 700;"
+        "}"
+        "QMessageBox QPushButton:hover {"
+        "background: rgba(255, 255, 255, 0.14);"
+        "}"
+        "QMessageBox QPushButton:pressed {"
+        "background: rgba(14, 165, 233, 0.28);"
+        "border: 1px solid rgba(125, 211, 252, 0.72);"
+        "}"
+    )
+
+    def show_message(parent, title, text, icon, buttons, defaultButton):
         msg = QtWidgets.QMessageBox(parent)
         msg.setWindowTitle(title)
         msg.setText(text)
+        msg.setTextFormat(QtCore.Qt.PlainText)
+        msg.setStyleSheet(messagebox_style)
         msg.setStandardButtons(buttons)
         if defaultButton != QtWidgets.QMessageBox.NoButton:
             msg.setDefaultButton(defaultButton)
-        icon = msg.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation)
-        msg.setIconPixmap(icon.pixmap(24, 24))
+        msg.setIcon(icon)
         return msg.exec()
 
+    def information(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+        return show_message(parent, title, text, QtWidgets.QMessageBox.Information, buttons, defaultButton)
+
+    def warning(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+        return show_message(parent, title, text, QtWidgets.QMessageBox.Warning, buttons, defaultButton)
+
+    def critical(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+        return show_message(parent, title, text, QtWidgets.QMessageBox.Critical, buttons, defaultButton)
+
+    def question(
+        parent,
+        title,
+        text,
+        buttons=QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        defaultButton=QtWidgets.QMessageBox.NoButton,
+    ):
+        return show_message(parent, title, text, QtWidgets.QMessageBox.Question, buttons, defaultButton)
+
     QtWidgets.QMessageBox.information = staticmethod(information)
+    QtWidgets.QMessageBox.warning = staticmethod(warning)
+    QtWidgets.QMessageBox.critical = staticmethod(critical)
+    QtWidgets.QMessageBox.question = staticmethod(question)
     QtWidgets.QMessageBox._estoque_tweaked = True
 
 
