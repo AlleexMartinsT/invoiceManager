@@ -216,33 +216,6 @@ class ComboPopupClickFilter(QtCore.QObject):
         self._popup_opened_by_filter = False
 
 
-class ComboArrowStyle(QtWidgets.QProxyStyle):
-    def drawComplexControl(self, control, option, painter, widget=None):
-        super().drawComplexControl(control, option, painter, widget)
-        if control != QtWidgets.QStyle.CC_ComboBox or not isinstance(widget, QtWidgets.QComboBox):
-            return
-
-        arrow_rect = self.subControlRect(control, option, QtWidgets.QStyle.SC_ComboBoxArrow, widget)
-        if not arrow_rect.isValid() or arrow_rect.width() <= 0:
-            return
-
-        center = arrow_rect.center()
-        points = QtGui.QPolygon(
-            [
-                QtCore.QPoint(center.x() - 4, center.y() - 2),
-                QtCore.QPoint(center.x() + 4, center.y() - 2),
-                QtCore.QPoint(center.x(), center.y() + 3),
-            ]
-        )
-
-        painter.save()
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor("#FFFFFF"))
-        painter.drawPolygon(points)
-        painter.restore()
-
-
 class ClickableDateEdit(QtWidgets.QDateEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -353,9 +326,6 @@ def style_combo_field(combo, center=True, height=FIELD_HEIGHT):
     if not getattr(combo, "_popup_click_filter", None):
         combo._popup_click_filter = ComboPopupClickFilter(combo)
         combo.installEventFilter(combo._popup_click_filter)
-    if not isinstance(combo.style(), ComboArrowStyle):
-        combo._combo_arrow_style = ComboArrowStyle(combo.style())
-        combo.setStyle(combo._combo_arrow_style)
     polish(combo)
     combo.setFixedHeight(height)
 
