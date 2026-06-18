@@ -471,9 +471,20 @@ class TableMixin:
                 f"A nota {n['nf_number']} ja esta conferida.\nDeseja desmarcar?",
             )
             if resp == QtWidgets.QMessageBox.Yes:
-                utils.update_note(n["id"], {"conferido": False})
-                QtWidgets.QMessageBox.information(self, "Sucesso", "Nota desmarcada como conferida.")
-                self.refresh_table()
+                try:
+                    if self._update_note_fields(n, {"conferido": False, "conferido_por": None, "conferido_em": None}):
+                        QtWidgets.QMessageBox.information(self, "Sucesso", "Nota desmarcada como conferida.")
+                        self.refresh_table()
+                    else:
+                        QtWidgets.QMessageBox.warning(self, "Aviso", "Nao foi possivel desmarcar a nota.")
+                except Exception as exc:
+                    utils.log_exception("Falha ao desmarcar nota como conferida", exc)
+                    QtWidgets.QMessageBox.critical(
+                        self,
+                        "Erro ao desmarcar",
+                        "Nao foi possivel desmarcar a nota. "
+                        f"O detalhe foi salvo em:\n{utils.runtime_log_path()}",
+                    )
             return
 
         dialog = QtWidgets.QDialog(self)
@@ -511,35 +522,41 @@ class TableMixin:
         def do_mark():
             chosen = conf_var.currentText()
             d = date_entry.text().strip()
+            if not chosen:
+                QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione um conferente.")
+                return
+
             try:
                 datetime.strptime(d, "%d-%m-%Y")
             except Exception:
                 QtWidgets.QMessageBox.warning(self, "Aviso", "Data invalida. Use DD-MM-YYYY.")
                 return
 
-            notes = utils.load_notes()
-            updated = False
-            for item in notes:
-                if str(item.get("nf_number")) == str(n.get("nf_number")):
-                    item["conferido"] = True
-                    item["conferido_por"] = chosen
-                    item["conferido_em"] = d
-                    updated = True
-                    break
-            if updated:
-                ok = self._save_notes_list(notes)
-                if not ok:
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        "Aviso",
-                        "Nao foi possivel salvar automaticamente. Atualize seu utils_estoque com save_all_notes/notes_path para persistencia.",
-                    )
+            try:
+                updated = self._update_note_fields(
+                    n,
+                    {
+                        "conferido": True,
+                        "conferido_por": chosen,
+                        "conferido_em": d,
+                    },
+                )
+                if not updated:
+                    QtWidgets.QMessageBox.warning(self, "Aviso", "Nao foi possivel marcar a nota como conferida.")
+                    return
+
                 self.refresh_table()
                 dialog.accept()
                 QtWidgets.QMessageBox.information(self, "Sucesso", "Marcado como conferido.")
-                Toast(self, f"Nota {n['nf_number']} conferida!")
-            else:
-                QtWidgets.QMessageBox.critical(self, "Erro", "Nota nao encontrada.")
+                Toast(self, f"Nota {n.get('nf_number')} conferida!")
+            except Exception as exc:
+                utils.log_exception("Falha ao marcar nota como conferida", exc)
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Erro ao marcar",
+                    "Nao foi possivel marcar a nota como conferida. "
+                    f"O detalhe foi salvo em:\n{utils.runtime_log_path()}",
+                )
 
         btn_confirm.clicked.connect(do_mark)
         btn_cancel.clicked.connect(dialog.reject)

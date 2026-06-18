@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import traceback
+import pathlib
 from datetime import datetime
 from supabase import create_client
 import uuid
@@ -384,6 +385,61 @@ def check_for_updates(root):
         os.makedirs(target_dir, exist_ok=True)
         return base_dir, target_dir
 
+    def install_marker_path(base_dir):
+        return os.path.join(base_dir, "latest.json")
+
+    def current_executable_path():
+        return os.path.abspath(sys.executable if getattr(sys, "frozen", False) else sys.argv[0])
+
+    def read_installed_release(base_dir):
+        try:
+            with open(install_marker_path(base_dir), "r", encoding="utf-8") as file:
+                data = json.load(file)
+            exe_path = os.path.abspath(data.get("exe_path") or "")
+            version = str(data.get("version") or "")
+            if version and exe_path and os.path.exists(exe_path):
+                return {"version": version, "exe_path": exe_path}
+        except Exception:
+            return None
+        return None
+
+    def write_installed_release(base_dir, version, exe_path):
+        data = {
+            "version": version,
+            "exe_path": os.path.abspath(exe_path),
+            "installed_at": datetime.now().isoformat(),
+        }
+        with open(install_marker_path(base_dir), "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+
+    def launch_installed_release_if_newer(latest_version):
+        if not getattr(sys, "frozen", False):
+            return False
+
+        base_dir = os.path.join(os.getenv("LOCALAPPDATA", "."), APP_DIR_NAME)
+        installed = read_installed_release(base_dir)
+        if not installed:
+            return False
+
+        installed_version = installed["version"]
+        installed_exe = installed["exe_path"]
+        current_exe = current_executable_path()
+        try:
+            same_file = pathlib.Path(installed_exe).resolve() == pathlib.Path(current_exe).resolve()
+        except Exception:
+            same_file = os.path.normcase(installed_exe) == os.path.normcase(current_exe)
+
+        if (
+            not same_file
+            and version_key(installed_version) >= version_key(latest_version)
+            and version_key(installed_version) > version_key(APP_VERSION)
+        ):
+            subprocess.Popen([installed_exe], cwd=os.path.dirname(installed_exe))
+            QtWidgets.QApplication.quit()
+            return True
+
+        return False
+
     def safe_extract_zip(zip_path, extract_dir):
         target_root = os.path.abspath(extract_dir)
         with zipfile.ZipFile(zip_path, "r") as zip_file:
@@ -438,6 +494,7 @@ def check_for_updates(root):
         if not exe_path or not os.path.exists(exe_path):
             raise RuntimeError("Nao foi possivel localizar o executavel na atualizacao.")
 
+        write_installed_release(base_dir, latest_version, exe_path)
         return exe_path
 
     def worker():
@@ -449,33 +506,48 @@ def check_for_updates(root):
             latest_version = data["tag_name"].lstrip("vV")
 
             if version_key(latest_version) > version_key(APP_VERSION):
+                if launch_installed_release_if_newer(latest_version):
+                    return
+
+                settings = load_settings()
+                if settings.get("ignored_update_version") == latest_version:
+                    return
+
                 def ask_user():
                     resp = QtWidgets.QMessageBox.question(
                         root,
                         "Atualizacao Disponivel",
                         f"Uma nova versao ({latest_version}) esta disponivel. Deseja baixar e reiniciar agora?",
                     )
-                    if resp == QtWidgets.QMessageBox.Yes:
-                        asset = choose_release_asset(data.get("assets", []))
-                        if not asset:
-                            QtWidgets.QMessageBox.critical(
-                                root,
-                                "Erro na Atualizacao",
-                                "Nenhum arquivo .zip ou .exe foi encontrado na release.",
-                            )
-                            return
+                    if resp != QtWidgets.QMessageBox.Yes:
+                        settings = load_settings()
+                        settings["ignored_update_version"] = latest_version
+                        save_settings(settings)
+                        return
 
-                        try:
-                            exe_path = download_asset(asset, latest_version)
-                            QtWidgets.QMessageBox.information(
-                                root,
-                                "Atualizado",
-                                "Nova versao baixada e extraida. O aplicativo sera reiniciado.",
-                            )
-                            subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
-                            QtWidgets.QApplication.quit()
-                        except Exception as e:
-                            QtWidgets.QMessageBox.critical(root, "Erro no Download", f"Ocorreu um erro: {e}")
+                    asset = choose_release_asset(data.get("assets", []))
+                    if not asset:
+                        QtWidgets.QMessageBox.critical(
+                            root,
+                            "Erro na Atualizacao",
+                            "Nenhum arquivo .zip ou .exe foi encontrado na release.",
+                        )
+                        return
+
+                    try:
+                        exe_path = download_asset(asset, latest_version)
+                        settings = load_settings()
+                        settings.pop("ignored_update_version", None)
+                        save_settings(settings)
+                        QtWidgets.QMessageBox.information(
+                            root,
+                            "Atualizado",
+                            "Nova versao baixada e instalada. O aplicativo sera reiniciado.",
+                        )
+                        subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+                        QtWidgets.QApplication.quit()
+                    except Exception as e:
+                        QtWidgets.QMessageBox.critical(root, "Erro no Download", f"Ocorreu um erro: {e}")
 
                 run_on_ui(ask_user)
             else:
