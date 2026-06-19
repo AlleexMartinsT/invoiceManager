@@ -422,13 +422,19 @@ class TableMixin:
         is_locked = bool(note and note.get("conferido", False))
 
         menu = QtWidgets.QMenu(self)
+
+        def add_menu_action(text, handler, enabled=True):
+            action = QtGui.QAction(text, menu)
+            action.setEnabled(enabled)
+            action.triggered.connect(lambda _checked=False, fn=handler: fn())
+            menu.addAction(action)
+            return action
+
         if col == 4:
-            action_cnpj = menu.addAction("Alterar CNPJ", lambda: self._edit_cnpj_for_row(row))
-            action_cnpj.setEnabled(not is_locked)
-        menu.addAction("Material Conferido", lambda: self._mark_conferido(row))
-        action_edit = menu.addAction("Editar linha", lambda: self._edit_line(row))
-        action_edit.setEnabled(not is_locked)
-        menu.addAction("Excluir nota", lambda: self._remove_line(row))
+            add_menu_action("Alterar CNPJ", lambda r=row: self._edit_cnpj_for_row(r), enabled=not is_locked)
+        add_menu_action("Material Conferido", lambda r=row: self._mark_conferido(r))
+        add_menu_action("Editar linha", lambda r=row: self._edit_line(r), enabled=not is_locked)
+        add_menu_action("Excluir nota", lambda r=row: self._remove_line(r))
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _on_table_double_click(self, row, col):
