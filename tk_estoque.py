@@ -614,7 +614,6 @@ class EstoqueApp(
 
     def _exec_modal_dialog(self, dialog, y_offset=18):
         self._prepare_dialog(dialog, modal=True)
-        QtCore.QTimer.singleShot(0, lambda d=dialog, offset=y_offset: animate_widget_entry(d, y_offset=offset))
         return dialog.exec()
 
     def update_entry_width(self, *_):

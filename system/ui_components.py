@@ -79,48 +79,7 @@ def style_button(button, accent=False, quiet=False, nav=False):
     button.setProperty("accent", accent)
     button.setProperty("quiet", quiet)
     button.setProperty("nav", nav)
-    if not getattr(button, "_click_feedback_bound", False):
-        button.pressed.connect(lambda b=button: _set_button_pressed(b, True))
-        button.released.connect(
-            lambda b=button: QtCore.QTimer.singleShot(110, lambda: _set_button_pressed(b, False))
-        )
-        button._click_feedback_bound = True
     polish(button)
-
-
-def _set_button_pressed(button, pressed):
-    try:
-        button.setProperty("pressedFeedback", pressed)
-        polish(button)
-        if pressed:
-            _spawn_button_pulse(button)
-    except RuntimeError:
-        return
-
-
-def _spawn_button_pulse(button):
-    pulse = QtWidgets.QFrame(button)
-    pulse.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-    pulse.setGeometry(button.rect())
-    pulse.setStyleSheet(
-        "background: rgba(125, 211, 252, 0.28);"
-        "border: 1px solid rgba(240, 249, 255, 0.40);"
-        "border-radius: 16px;"
-    )
-    effect = QtWidgets.QGraphicsOpacityEffect(pulse)
-    effect.setOpacity(0.85)
-    pulse.setGraphicsEffect(effect)
-    pulse.show()
-    pulse.raise_()
-
-    animation = QtCore.QPropertyAnimation(effect, b"opacity", pulse)
-    animation.setDuration(180)
-    animation.setStartValue(0.85)
-    animation.setEndValue(0.0)
-    animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
-    animation.finished.connect(pulse.deleteLater)
-    pulse._pulse_animation = animation
-    animation.start(QtCore.QAbstractAnimation.DeleteWhenStopped)
 
 
 class ComboFieldDelegate(QtWidgets.QStyledItemDelegate):
