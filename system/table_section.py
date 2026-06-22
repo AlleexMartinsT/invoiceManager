@@ -559,7 +559,7 @@ class TableMixin:
 
         layout.addWidget(make_label(dialog, f"Nota: {n.get('nf_number')}"))
         conf_list = self._conferente_names()
-        conf_var = QtWidgets.QComboBox(dialog)
+        conf_var = CenteredComboBox(dialog)
         conf_var.addItems(conf_list)
         style_combo_field(conf_var, center=True)
         if n.get("conferido_por"):

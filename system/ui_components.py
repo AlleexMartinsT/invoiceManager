@@ -183,39 +183,6 @@ class CenteredComboBox(QtWidgets.QComboBox):
         painter.drawText(draw_rect, alignment, text)
 
 
-class ComboPopupClickFilter(QtCore.QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._popup_opened_by_filter = False
-
-    def eventFilter(self, watched, event):
-        if (
-            isinstance(watched, QtWidgets.QComboBox)
-            and event.type() == QtCore.QEvent.MouseButtonPress
-            and event.button() == QtCore.Qt.LeftButton
-        ):
-            watched.setFocus(QtCore.Qt.MouseFocusReason)
-            if watched.view().isVisible():
-                watched.hidePopup()
-            else:
-                self._popup_opened_by_filter = True
-                watched.showPopup()
-                QtCore.QTimer.singleShot(0, self._release_popup_guard)
-            event.accept()
-            return True
-        if (
-            isinstance(watched, QtWidgets.QComboBox)
-            and event.type() == QtCore.QEvent.MouseButtonRelease
-            and self._popup_opened_by_filter
-        ):
-            event.accept()
-            return True
-        return super().eventFilter(watched, event)
-
-    def _release_popup_guard(self):
-        self._popup_opened_by_filter = False
-
-
 class ClickableDateEdit(QtWidgets.QDateEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -307,25 +274,11 @@ def style_combo_field(combo, center=True, height=FIELD_HEIGHT):
         combo.setEditable(False)
         combo.setCenterText(center)
     else:
-        combo.setEditable(True)
-        combo.lineEdit().setReadOnly(True)
-        combo.lineEdit().setFocusPolicy(QtCore.Qt.NoFocus)
-        combo.lineEdit().setCursor(QtCore.Qt.ArrowCursor)
-        combo.lineEdit().setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-        combo.lineEdit().setAlignment(
-            QtCore.Qt.AlignCenter if center else QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
-        )
+        combo.setEditable(False)
     combo.setFocusPolicy(QtCore.Qt.StrongFocus)
     combo.setCursor(QtCore.Qt.PointingHandCursor)
-    combo.setItemDelegate(ComboFieldDelegate(combo, center=center))
-    combo.view().setItemDelegate(ComboFieldDelegate(combo.view(), center=center))
-    combo.view().setTextElideMode(QtCore.Qt.ElideNone)
-    combo.view().setAlternatingRowColors(False)
     combo.setMaxVisibleItems(12)
     combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContentsOnFirstShow)
-    if not getattr(combo, "_popup_click_filter", None):
-        combo._popup_click_filter = ComboPopupClickFilter(combo)
-        combo.installEventFilter(combo._popup_click_filter)
     polish(combo)
     combo.setFixedHeight(height)
 
