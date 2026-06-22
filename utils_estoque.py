@@ -4,6 +4,7 @@ import sys
 import json
 import traceback
 import pathlib
+import faulthandler
 from datetime import datetime
 from supabase import create_client
 import uuid
@@ -86,7 +87,13 @@ def save_note(note: dict):
     return load_notes()
 
 def update_note(note_id, fields: dict):
+    diagnostic_log(
+        "supabase_update_note_start",
+        note_id=note_id,
+        fields=list((fields or {}).keys()),
+    )
     supabase.table("notes").update(fields).eq("id", note_id).execute()
+    diagnostic_log("supabase_update_note_done", note_id=note_id)
     return load_notes()
 
 def remove_note(note_id):
@@ -124,6 +131,71 @@ def app_data_dir():
 def runtime_log_path():
     return os.path.join(app_data_dir(), "app.log")
 
+def diagnostic_log_dirs():
+    dirs = [app_data_dir()]
+    env_dir = os.getenv("ESTOQUE_DIAGNOSTIC_LOG_DIR")
+    if env_dir:
+        dirs.append(env_dir)
+    return list(dict.fromkeys(dirs))
+
+def _diagnostic_log_filename(prefix="diagnostic"):
+    computer = os.getenv("COMPUTERNAME") or "unknown-pc"
+    user = os.getenv("USERNAME") or "unknown-user"
+    safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in f"{computer}-{user}")
+    return f"{prefix}-{safe_name}.log"
+
+def diagnostic_log_paths(prefix="diagnostic"):
+    return [os.path.join(path, _diagnostic_log_filename(prefix)) for path in diagnostic_log_dirs()]
+
+def _app_version():
+    try:
+        from versionfile_generator import APP_VERSION
+
+        return APP_VERSION
+    except Exception:
+        return "unknown"
+
+def diagnostic_log(event, **details):
+    record = {
+        "ts": datetime.now().isoformat(timespec="milliseconds"),
+        "event": str(event),
+        "pid": os.getpid(),
+        "computer": os.getenv("COMPUTERNAME"),
+        "user": os.getenv("USERNAME"),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "exe": os.path.basename(sys.executable or ""),
+        "version": _app_version(),
+        "details": details,
+    }
+    line = json.dumps(record, ensure_ascii=False, default=str)
+
+    for path in diagnostic_log_paths():
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as file:
+                file.write(line + "\n")
+                file.flush()
+        except Exception:
+            continue
+
+def install_fault_handler():
+    if getattr(sys, "_estoque_fault_handler_installed", False):
+        return
+
+    for path in diagnostic_log_paths("fatal"):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            handle = open(path, "a", encoding="utf-8")
+            handle.write(f"\n=== fault handler enabled {datetime.now().isoformat()} pid={os.getpid()} ===\n")
+            handle.flush()
+            faulthandler.enable(file=handle, all_threads=True)
+            sys._estoque_fault_log_handle = handle
+            sys._estoque_fault_handler_installed = True
+            diagnostic_log("fault_handler_enabled", path=path)
+            return
+        except Exception:
+            continue
+
 def log_exception(context, exc=None, exc_info=None):
     if exc_info is None:
         exc_info = sys.exc_info()
@@ -142,10 +214,13 @@ def log_exception(context, exc=None, exc_info=None):
 
     with open(runtime_log_path(), "a", encoding="utf-8") as file:
         file.write("\n".join(lines).rstrip() + "\n")
+    diagnostic_log("exception", context=context, error=repr(exc), has_traceback=bool(exc_info and exc_info[0]))
 
 def install_global_exception_hook():
     if getattr(sys, "_estoque_exception_hook_installed", False):
         return
+    install_fault_handler()
+    diagnostic_log("exception_hook_install")
 
     def show_error_message():
         try:
@@ -238,21 +313,34 @@ def poll_notifications(app, state=[{"first_run": True, "signatures": {}}]):
                 note_id = str(n.get("id"))
                 if note_id in added:
                     if n.get("conferido", False):
+                        diagnostic_log("poll_notification_toast_start", note_id=note_id, kind="added_conferido")
                         Toast(app, f"Nota {n['nf_number']} conferida!")
+                        diagnostic_log("poll_notification_toast_done", note_id=note_id, kind="added_conferido")
                     else:
+                        diagnostic_log("poll_notification_toast_start", note_id=note_id, kind="added")
                         Toast(app, f"Nota {n['nf_number']} adicionada!")
+                        diagnostic_log("poll_notification_toast_done", note_id=note_id, kind="added")
                 elif note_id in changed:
                     previous_sig = previous.get(note_id, ())
                     was_conferido = bool(previous_sig[6]) if len(previous_sig) > 6 else False
                     if not was_conferido and n.get("conferido", False):
+                        diagnostic_log("poll_notification_toast_start", note_id=note_id, kind="changed_conferido")
                         Toast(app, f"Nota {n['nf_number']} conferida!")
+                        diagnostic_log("poll_notification_toast_done", note_id=note_id, kind="changed_conferido")
 
             if (added or removed or changed) and hasattr(app, "refresh_table"):
+                diagnostic_log(
+                    "poll_notification_refresh_scheduled",
+                    added=len(added),
+                    removed=len(removed),
+                    changed=len(changed),
+                )
                 QtCore.QTimer.singleShot(0, app.refresh_table)
 
             state[0]["signatures"] = current
 
         except Exception as e:
+            diagnostic_log("poll_notifications_error", error=repr(e))
             print("Erro ao checar notificacoes:", e)
 
     timer = QtCore.QTimer(app)

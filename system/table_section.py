@@ -412,30 +412,71 @@ class TableMixin:
             self.label_contador.setText(texto)
 
     def _on_table_context_menu(self, pos):
+        utils.diagnostic_log("context_menu_requested", pos_x=pos.x(), pos_y=pos.y())
         index = self.table.indexAt(pos)
         if not index.isValid():
+            utils.diagnostic_log("context_menu_invalid_index")
             return
         row = index.row()
         col = index.column()
         self.table.selectRow(row)
         note = self._get_note_by_row(row)
         is_locked = bool(note and note.get("conferido", False))
+        utils.diagnostic_log(
+            "context_menu_note_selected",
+            row=row,
+            col=col,
+            note_id=(note or {}).get("id"),
+            nf_number=(note or {}).get("nf_number"),
+            is_locked=is_locked,
+        )
 
-        menu = QtWidgets.QMenu(self)
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Acoes da nota")
+        dialog.setModal(True)
+        dialog.setFixedSize(310, 280 if col == 4 else 230)
+        dialog._pending_action = None
 
-        def add_menu_action(text, handler, enabled=True):
-            action = QtGui.QAction(text, menu)
-            action.setEnabled(enabled)
-            action.triggered.connect(lambda _checked=False, fn=handler: fn())
-            menu.addAction(action)
-            return action
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title = make_label(dialog, f"Nota {note.get('nf_number') if note else ''}", hero=True, anchor="center")
+        layout.addWidget(title, 0, QtCore.Qt.AlignCenter)
+
+        def add_action_button(text, handler, enabled=True, accent=False):
+            button = QtWidgets.QPushButton(text, dialog)
+            button.setEnabled(enabled)
+            style_button(button, accent=accent, quiet=not accent)
+            layout.addWidget(button)
+
+            def choose_action():
+                utils.diagnostic_log("context_menu_action_chosen", text=text, row=row)
+                dialog._pending_action = handler
+                dialog.accept()
+
+            button.clicked.connect(choose_action)
+            return button
 
         if col == 4:
-            add_menu_action("Alterar CNPJ", lambda r=row: self._edit_cnpj_for_row(r), enabled=not is_locked)
-        add_menu_action("Material Conferido", lambda r=row: self._mark_conferido(r))
-        add_menu_action("Editar linha", lambda r=row: self._edit_line(r), enabled=not is_locked)
-        add_menu_action("Excluir nota", lambda r=row: self._remove_line(r))
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+            add_action_button("Alterar CNPJ", lambda r=row: self._edit_cnpj_for_row(r), enabled=not is_locked)
+        add_action_button("Material Conferido", lambda r=row: self._mark_conferido(r), accent=True)
+        add_action_button("Editar linha", lambda r=row: self._edit_line(r), enabled=not is_locked)
+        add_action_button("Excluir nota", lambda r=row: self._remove_line(r))
+
+        close_button = QtWidgets.QPushButton("Fechar", dialog)
+        style_button(close_button, quiet=True)
+        close_button.clicked.connect(dialog.reject)
+        layout.addWidget(close_button)
+
+        utils.diagnostic_log("context_menu_action_dialog_exec_start", row=row, col=col)
+        self._exec_modal_dialog(dialog, y_offset=12)
+        utils.diagnostic_log("context_menu_action_dialog_exec_done", row=row, col=col)
+        pending_action = getattr(dialog, "_pending_action", None)
+        if pending_action:
+            utils.diagnostic_log("context_menu_pending_action_start", row=row, col=col)
+            pending_action()
+            utils.diagnostic_log("context_menu_pending_action_done", row=row, col=col)
 
     def _on_table_double_click(self, row, col):
         if col == 4:
@@ -466,22 +507,38 @@ class TableMixin:
         QtWidgets.QMessageBox.information(self, "Sucesso", "Nota removida.")
 
     def _mark_conferido(self, row):
+        utils.diagnostic_log("mark_conferido_start", row=row)
         n = self._get_note_by_row(row)
         if not n:
+            utils.diagnostic_log("mark_conferido_no_note", row=row)
             return
+        utils.diagnostic_log(
+            "mark_conferido_note_loaded",
+            row=row,
+            note_id=n.get("id"),
+            nf_number=n.get("nf_number"),
+            already_conferido=bool(n.get("conferido", False)),
+        )
 
         if n.get("conferido", False):
+            utils.diagnostic_log("mark_conferido_unmark_question_start", note_id=n.get("id"))
             resp = QtWidgets.QMessageBox.question(
                 self,
                 "Desmarcar",
                 f"A nota {n['nf_number']} ja esta conferida.\nDeseja desmarcar?",
             )
+            utils.diagnostic_log("mark_conferido_unmark_question_done", response=str(resp))
             if resp == QtWidgets.QMessageBox.Yes:
                 try:
+                    utils.diagnostic_log("mark_conferido_unmark_update_start", note_id=n.get("id"))
                     if self._update_note_fields(n, {"conferido": False, "conferido_por": None, "conferido_em": None}):
+                        utils.diagnostic_log("mark_conferido_unmark_update_done", note_id=n.get("id"))
                         QtWidgets.QMessageBox.information(self, "Sucesso", "Nota desmarcada como conferida.")
+                        utils.diagnostic_log("mark_conferido_unmark_refresh_start", note_id=n.get("id"))
                         self.refresh_table()
+                        utils.diagnostic_log("mark_conferido_unmark_refresh_done", note_id=n.get("id"))
                     else:
+                        utils.diagnostic_log("mark_conferido_unmark_update_false", note_id=n.get("id"))
                         QtWidgets.QMessageBox.warning(self, "Aviso", "Nao foi possivel desmarcar a nota.")
                 except Exception as exc:
                     utils.log_exception("Falha ao desmarcar nota como conferida", exc)
@@ -493,6 +550,7 @@ class TableMixin:
                     )
             return
 
+        utils.diagnostic_log("mark_conferido_dialog_build_start", note_id=n.get("id"))
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Marcar como conferido")
         dialog.setModal(True)
@@ -526,19 +584,29 @@ class TableMixin:
         layout.addLayout(btns)
 
         def do_mark():
+            utils.diagnostic_log("mark_conferido_confirm_clicked", note_id=n.get("id"))
             chosen = conf_var.currentText()
             d = date_entry.text().strip()
+            utils.diagnostic_log(
+                "mark_conferido_confirm_values",
+                note_id=n.get("id"),
+                conferente=chosen,
+                data=d,
+            )
             if not chosen:
+                utils.diagnostic_log("mark_conferido_missing_conferente", note_id=n.get("id"))
                 QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione um conferente.")
                 return
 
             try:
                 datetime.strptime(d, "%d-%m-%Y")
             except Exception:
+                utils.diagnostic_log("mark_conferido_invalid_date", note_id=n.get("id"), data=d)
                 QtWidgets.QMessageBox.warning(self, "Aviso", "Data invalida. Use DD-MM-YYYY.")
                 return
 
             try:
+                utils.diagnostic_log("mark_conferido_update_start", note_id=n.get("id"))
                 updated = self._update_note_fields(
                     n,
                     {
@@ -547,14 +615,23 @@ class TableMixin:
                         "conferido_em": d,
                     },
                 )
+                utils.diagnostic_log("mark_conferido_update_done", note_id=n.get("id"), updated=updated)
                 if not updated:
                     QtWidgets.QMessageBox.warning(self, "Aviso", "Nao foi possivel marcar a nota como conferida.")
                     return
 
+                utils.diagnostic_log("mark_conferido_refresh_start", note_id=n.get("id"))
                 self.refresh_table()
+                utils.diagnostic_log("mark_conferido_refresh_done", note_id=n.get("id"))
+                utils.diagnostic_log("mark_conferido_dialog_accept_start", note_id=n.get("id"))
                 dialog.accept()
+                utils.diagnostic_log("mark_conferido_dialog_accept_done", note_id=n.get("id"))
+                utils.diagnostic_log("mark_conferido_success_message_start", note_id=n.get("id"))
                 QtWidgets.QMessageBox.information(self, "Sucesso", "Marcado como conferido.")
+                utils.diagnostic_log("mark_conferido_success_message_done", note_id=n.get("id"))
+                utils.diagnostic_log("mark_conferido_toast_start", note_id=n.get("id"))
                 Toast(self, f"Nota {n.get('nf_number')} conferida!")
+                utils.diagnostic_log("mark_conferido_toast_done", note_id=n.get("id"))
             except Exception as exc:
                 utils.log_exception("Falha ao marcar nota como conferida", exc)
                 QtWidgets.QMessageBox.critical(
@@ -566,7 +643,9 @@ class TableMixin:
 
         btn_confirm.clicked.connect(do_mark)
         btn_cancel.clicked.connect(dialog.reject)
+        utils.diagnostic_log("mark_conferido_dialog_exec_start", note_id=n.get("id"))
         self._exec_modal_dialog(dialog)
+        utils.diagnostic_log("mark_conferido_dialog_exec_done", note_id=n.get("id"))
 
     def _make_cnpj_combo(self, parent, current_value=None):
         combo = CenteredComboBox(parent)

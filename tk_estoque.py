@@ -33,6 +33,7 @@ class EstoqueApp(
     def __init__(self):
         super().__init__()
         utils.install_global_exception_hook()
+        utils.diagnostic_log("app_init_start", argv=sys.argv)
         self._install_app_font()
         install_messagebox_tweaks()
         self.root = self
@@ -65,6 +66,7 @@ class EstoqueApp(
         self._setup_tooltip_support()
         self._bind_search_suggestions()
         utils.poll_notifications(self)
+        utils.diagnostic_log("app_init_done")
 
     def _install_app_font(self):
         app = QtWidgets.QApplication.instance()
@@ -783,13 +785,17 @@ class EstoqueApp(
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
+        utils.diagnostic_log("app_close_event")
         event.accept()
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
     utils.install_global_exception_hook()
+    utils.diagnostic_log("app_main_start", argv=sys.argv)
     window = EstoqueApp()
     utils.check_for_updates(window)
     window.showMaximized()
-    sys.exit(app.exec())
+    result = app.exec()
+    utils.diagnostic_log("app_exec_finished", result=result)
+    sys.exit(result)

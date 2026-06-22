@@ -689,6 +689,8 @@ class Toast(QtWidgets.QWidget):
         QtCore.QTimer.singleShot(timeout_ms, self._close)
 
     def _show_native_notification(self, parent, text):
+        if getattr(sys, "frozen", False):
+            return False
         if not sys.platform.startswith("win"):
             return False
         if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
